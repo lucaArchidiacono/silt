@@ -273,7 +273,7 @@ const App = () => {
               }}
             >
               <text
-                content={`${(e.created_at ?? "").slice(0, 16)}  `}
+                content={`${(e.createdAt ?? "").slice(0, 16)}  `}
                 style={{ fg: isSelected ? HIGHLIGHT_FG : DIM, bg: isSelected ? HIGHLIGHT_BG : BG }}
               />
               <text

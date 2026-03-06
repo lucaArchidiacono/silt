@@ -1,53 +1,35 @@
-import { execSync } from "child_process"
-import { resolve } from "path"
+import { SiltSession, getConfig as nativeGetConfig, setConfig as nativeSetConfig, type JsEntry } from "../../napi"
 
-export type Entry = {
-  id: string
-  body: string
-  created_at: string
-  deleted_at: string | null
-}
+export type Entry = JsEntry
 
-const BIN = resolve(import.meta.dir, "../../target/release/silt-cli")
-
-function run(args: string[]): string {
-  return execSync([BIN, ...args].map((a) => `'${a}'`).join(" "), {
-    encoding: "utf-8",
-    timeout: 5000,
-  }).trim()
-}
+const silt = new SiltSession()
 
 export function newEntry(body: string): Entry {
-  return JSON.parse(run(["new", body]))
+  return silt.newEntry(body)
 }
 
 export function listEntries(): Entry[] {
-  return JSON.parse(run(["list"]))
+  return silt.listEntries()
 }
 
 export function searchEntries(query: string): Entry[] {
-  return JSON.parse(run(["search", query]))
+  return silt.search(query)
 }
 
 export function editEntry(id: string, body: string): Entry {
-  return JSON.parse(run(["edit", id, body]))
+  return silt.editEntry(id, body)
 }
 
 export function deleteEntry(id: string): void {
-  run(["delete", id])
+  silt.deleteEntry(id)
 }
 
 export function getConfig(key: string): string | null {
-  try {
-    const result = JSON.parse(run(["config", "get", key]))
-    return result.value || null
-  } catch {
-    return null
-  }
+  return nativeGetConfig(key)
 }
 
 export function setConfig(key: string, value: string): void {
-  run(["config", "set", key, value])
+  nativeSetConfig(key, value)
 }
 
 const DROPBOX_APP_KEY = "yo99v8km1tmfhjj"

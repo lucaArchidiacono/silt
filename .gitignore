@@ -1,6 +1,12 @@
 /target
+/dist
 data/
 *.db
 .DS_Store
 node_modules/
+*.bun-build
 tui/bun.lock
+napi/bun.lock
+napi/*.node
+napi/index.js
+napi/index.d.ts

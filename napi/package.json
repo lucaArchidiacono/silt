@@ -1,0 +1,16 @@
+{
+  "name": "silt-napi",
+  "version": "0.1.0",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "binaryName": "silt_napi"
+  },
+  "scripts": {
+    "build": "napi build --release --platform",
+    "build:debug": "napi build"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3"
+  }
+}
