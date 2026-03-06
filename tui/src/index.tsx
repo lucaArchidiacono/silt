@@ -1,15 +1,22 @@
 import { createCliRenderer } from "@opentui/core"
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useState, useCallback } from "react"
-import { listEntries, newEntry, searchEntries, editEntry, deleteEntry, type Entry } from "./silt"
+import { listEntries, newEntry, searchEntries, editEntry, deleteEntry, getConfig, setConfig, authDropbox, type Entry } from "./silt"
 
 const BG = "#000000"
 const FG = "#CCCCCC"
 const DIM = "#666666"
 const HIGHLIGHT_BG = "#FFFF00"
 const HIGHLIGHT_FG = "#000000"
+const ACCENT = "#FFFF00"
 
 type Mode = "write" | "list" | "search" | "edit"
+type SettingsScreen = "menu" | "providers" | "dropbox"
+
+function maskToken(token: string): string {
+  if (token.length <= 8) return "****"
+  return token.slice(0, 4) + "****" + token.slice(-4)
+}
 
 const App = () => {
   const renderer = useRenderer()
@@ -19,6 +26,18 @@ const App = () => {
   const [selected, setSelected] = useState(0)
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null)
   const [status, setStatus] = useState("")
+  const [showSettings, setShowSettings] = useState(false)
+  const [settingsScreen, setSettingsScreen] = useState<SettingsScreen>("menu")
+  const [settingsSelected, setSettingsSelected] = useState(0)
+  const [dropboxToken, setDropboxToken] = useState<string | null>(null)
+  const [authInProgress, setAuthInProgress] = useState(false)
+
+  const menuItems: { label: string; screen: SettingsScreen }[] =
+    settingsScreen === "menu"
+      ? [{ label: "Sync Providers", screen: "providers" }]
+      : settingsScreen === "providers"
+        ? [{ label: "Dropbox", screen: "dropbox" }]
+        : []
 
   useKeyboard((key) => {
     if (key.ctrl && (key.name === "c" || key.name === "q")) {
@@ -26,6 +45,76 @@ const App = () => {
       process.exit(0)
     }
 
+    // Toggle settings overlay
+    if (key.ctrl && key.name === "s") {
+      setShowSettings((s) => {
+        if (!s) {
+          setSettingsScreen("menu")
+          setSettingsSelected(0)
+        }
+        return !s
+      })
+      return
+    }
+
+    // Settings overlay keyboard handling
+    if (showSettings) {
+      if (key.name === "escape") {
+        if (settingsScreen === "dropbox") {
+          setSettingsScreen("providers")
+          setSettingsSelected(0)
+        } else if (settingsScreen === "providers") {
+          setSettingsScreen("menu")
+          setSettingsSelected(0)
+        } else {
+          setShowSettings(false)
+        }
+        return
+      }
+
+      if (settingsScreen === "dropbox") {
+        if (key.name === "return" && !dropboxToken && !authInProgress) {
+          setAuthInProgress(true)
+          setStatus("Opening browser...")
+          authDropbox()
+            .then((token) => {
+              setDropboxToken(token)
+              setAuthInProgress(false)
+              setStatus("Dropbox connected!")
+            })
+            .catch(() => {
+              setAuthInProgress(false)
+              setStatus("Dropbox authorization failed.")
+            })
+        }
+        if (key.name === "d" && dropboxToken) {
+          setConfig("dropbox_token", "")
+          setConfig("dropbox_refresh_token", "")
+          setDropboxToken(null)
+          setStatus("Dropbox disconnected.")
+        }
+        return
+      }
+
+      // Menu / providers navigation
+      if (key.name === "j" || key.name === "down") {
+        setSettingsSelected((s) => Math.min(s + 1, menuItems.length - 1))
+      }
+      if (key.name === "k" || key.name === "up") {
+        setSettingsSelected((s) => Math.max(s - 1, 0))
+      }
+      if (key.name === "return" && menuItems[settingsSelected]) {
+        const target = menuItems[settingsSelected].screen
+        if (target === "dropbox") {
+          setDropboxToken(getConfig("dropbox_token"))
+        }
+        setSettingsScreen(target)
+        setSettingsSelected(0)
+      }
+      return
+    }
+
+    // Main app keyboard handling (only when settings closed)
     if (mode === "edit") {
       if (key.name === "escape") {
         setMode("list")
@@ -125,7 +214,7 @@ const App = () => {
             bg: mode === "search" ? "#FFFFFF" : BG,
           }}
         />
-        <text content="  Tab: switch  Ctrl+Q: quit" style={{ fg: DIM, bg: BG }} />
+        <text content="  Tab: switch  Ctrl+S: settings  Ctrl+Q: quit" style={{ fg: DIM, bg: BG }} />
       </box>
 
       {/* Input area */}
@@ -133,7 +222,7 @@ const App = () => {
         <box title="Write (Enter to save)" style={{ border: true, height: 5, bg: BG, borderColor: DIM }}>
           <input
             placeholder="What's on your mind?"
-            focused={true}
+            focused={!showSettings}
             onSubmit={handleWrite}
             style={{ bg: BG, fg: FG, focusedBackgroundColor: BG }}
           />
@@ -143,7 +232,7 @@ const App = () => {
         <box title="Search (Enter to search)" style={{ border: true, height: 5, bg: BG, borderColor: DIM }}>
           <input
             placeholder="Search your entries..."
-            focused={true}
+            focused={!showSettings}
             onSubmit={handleSearch}
             style={{ bg: BG, fg: FG, focusedBackgroundColor: BG }}
           />
@@ -153,7 +242,7 @@ const App = () => {
         <box title="Edit (Enter to save, Esc to cancel)" style={{ border: true, height: 5, bg: BG, borderColor: DIM }}>
           <input
             value={editingEntry.body}
-            focused={true}
+            focused={!showSettings}
             onSubmit={handleEdit}
             style={{ bg: BG, fg: FG, focusedBackgroundColor: BG }}
           />
@@ -195,6 +284,81 @@ const App = () => {
           )
         })}
       </scrollbox>
+
+      {/* Settings overlay */}
+      {showSettings && (
+        <box
+          style={{
+            position: "absolute",
+            width: 60,
+            height: 18,
+            left: Math.floor((dimensions.width - 60) / 2),
+            top: Math.floor((dimensions.height - 18) / 2),
+            border: true,
+            borderColor: ACCENT,
+            bg: BG,
+            flexDirection: "column",
+            zIndex: 10,
+          }}
+          title={
+            settingsScreen === "menu"
+              ? "Settings"
+              : settingsScreen === "providers"
+                ? "Sync Providers"
+                : "Dropbox"
+          }
+        >
+          {settingsScreen === "menu" && (
+            <box style={{ flexDirection: "column", paddingX: 2, paddingY: 1 }}>
+              <box style={{ flexDirection: "row", height: 1, bg: settingsSelected === 0 ? HIGHLIGHT_BG : BG }}>
+                <text content="  Sync Providers" style={{ fg: settingsSelected === 0 ? HIGHLIGHT_FG : FG, bg: settingsSelected === 0 ? HIGHLIGHT_BG : BG }} />
+              </box>
+              <text content="" style={{ fg: DIM, height: 1 }} />
+              <text content="  j/k: navigate  Enter: select  Esc: close" style={{ fg: DIM }} />
+            </box>
+          )}
+
+          {settingsScreen === "providers" && (
+            <box style={{ flexDirection: "column", paddingX: 2, paddingY: 1 }}>
+              <box style={{ flexDirection: "row", height: 1, bg: settingsSelected === 0 ? HIGHLIGHT_BG : BG }}>
+                <text content="  Dropbox" style={{ fg: settingsSelected === 0 ? HIGHLIGHT_FG : FG, bg: settingsSelected === 0 ? HIGHLIGHT_BG : BG }} />
+              </box>
+              <text content="" style={{ fg: DIM, height: 1 }} />
+              <text content="  Enter: select  Esc: back" style={{ fg: DIM }} />
+            </box>
+          )}
+
+          {settingsScreen === "dropbox" && (
+            <box style={{ flexDirection: "column", paddingX: 2, paddingY: 1 }}>
+              <text content="Dropbox Sync" style={{ fg: FG, height: 1 }} />
+              <text content={`Syncs to /Apps/silt/entries/`} style={{ fg: DIM, height: 1 }} />
+              <text content="" style={{ fg: DIM, height: 1 }} />
+
+              {dropboxToken ? (
+                <box style={{ flexDirection: "column" }}>
+                  <text content="Status: Connected" style={{ fg: "#00FF00", height: 1 }} />
+                  <text content={`Token:  ${maskToken(dropboxToken)}`} style={{ fg: FG, height: 1 }} />
+                  <text content="" style={{ fg: DIM, height: 1 }} />
+                  <text content="  d: disconnect  Esc: back" style={{ fg: DIM }} />
+                </box>
+              ) : authInProgress ? (
+                <box style={{ flexDirection: "column" }}>
+                  <text content="Waiting for authorization..." style={{ fg: ACCENT, height: 1 }} />
+                  <text content="Your browser should open automatically." style={{ fg: DIM, height: 1 }} />
+                  <text content="" style={{ fg: DIM, height: 1 }} />
+                  <text content="  Esc: cancel" style={{ fg: DIM }} />
+                </box>
+              ) : (
+                <box style={{ flexDirection: "column" }}>
+                  <text content="Status: Not connected" style={{ fg: DIM, height: 1 }} />
+                  <text content="" style={{ fg: DIM, height: 1 }} />
+                  <text content="  Enter: connect Dropbox  Esc: back" style={{ fg: DIM }} />
+                </box>
+              )}
+            </box>
+          )}
+        </box>
+      )}
 
       {/* Status */}
       <text content={status} style={{ fg: DIM, height: 1, bg: BG }} />

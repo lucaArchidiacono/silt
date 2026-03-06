@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod dropbox;
 pub mod entry;
 pub mod index;
 pub mod storage;

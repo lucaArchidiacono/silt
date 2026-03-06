@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone)]
 pub enum SyncStatus {
     Idle,
     Syncing,
