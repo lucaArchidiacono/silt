@@ -40,6 +40,18 @@ cli:  ## Build CLI binary → dist/silt-cli
 # android:  ## Build Android app (UniFFI)
 # 	cd android && <build command>
 
+# ─── Checks ───────────────────────────────────────────
+
+.PHONY: check typecheck test
+check: typecheck test  ## Run all checks (types + tests)
+
+typecheck:  ## Type-check Rust workspace + TUI TypeScript
+	cargo check
+	cd tui && bun run typecheck
+
+test:  ## Run core tests
+	cargo test -p silt-core
+
 # ─── Housekeeping ──────────────────────────────────────
 
 clean:  ## Remove build artifacts

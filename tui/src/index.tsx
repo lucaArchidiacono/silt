@@ -1,5 +1,5 @@
 import { createCliRenderer } from "@opentui/core";
-import type { TextareaRenderable } from "@opentui/core";
+import type { TextareaRenderable, ScrollBoxRenderable } from "@opentui/core";
 import {
   createRoot,
   useKeyboard,
@@ -82,6 +82,7 @@ const App = () => {
   const spinnerFrameRef = useRef(0);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [logScroll, setLogScroll] = useState(0);
+  const logScrollRef = useRef<ScrollBoxRenderable>(null);
 
   const startSync = useCallback(
     (
@@ -240,24 +241,28 @@ const App = () => {
 
     // Log viewer keyboard handling
     if (dialog === "logs") {
+      const setScroll = (value: number) => {
+        setLogScroll(value);
+        if (logScrollRef.current) logScrollRef.current.scrollTop = value;
+      };
       if (key.name === "escape") {
         setDialog(null);
         return;
       }
       if (key.name === "j" || key.name === "down") {
-        setLogScroll((s) => Math.min(s + 1, Math.max(0, logLines.length - 1)));
+        setScroll(Math.min(logScroll + 1, Math.max(0, logLines.length - 1)));
         return;
       }
       if (key.name === "k" || key.name === "up") {
-        setLogScroll((s) => Math.max(s - 1, 0));
+        setScroll(Math.max(logScroll - 1, 0));
         return;
       }
       if (key.name === "g" && key.shift) {
-        setLogScroll(Math.max(0, logLines.length - 1));
+        setScroll(Math.max(0, logLines.length - 1));
         return;
       }
       if (key.name === "g" && !key.shift) {
-        setLogScroll(0);
+        setScroll(0);
         return;
       }
       if (key.name === "r") {
@@ -273,7 +278,7 @@ const App = () => {
       if (key.name === "x") {
         clearLogs();
         setLogLines([]);
-        setLogScroll(0);
+        setScroll(0);
         setStatus("Logs cleared.");
         return;
       }
@@ -604,7 +609,7 @@ const App = () => {
           <input
             value={editingEntry.body}
             focused={dialog === null}
-            onSubmit={handleEdit}
+            onSubmit={(value) => handleEdit(value.toString())}
             style={{
               backgroundColor: BG,
               textColor: FG,
@@ -932,8 +937,8 @@ const App = () => {
             }
             return (
               <scrollbox
+                ref={logScrollRef}
                 style={{ flexGrow: 1, backgroundColor: BG }}
-                scrollTop={logScroll}
               >
                 {lines.map((l, i) => (
                   <text

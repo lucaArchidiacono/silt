@@ -136,7 +136,12 @@ Tests live in each core module as `#[cfg(test)] mod tests`. Use `tempfile` for i
 - `dropbox.rs` — path construction, upload arg serialization, file filtering, status
 - `google_drive.rs` — metadata serialization, file deserialization, pagination, folder ID caching
 
-Always run `cargo test -p silt-core` after changes to the core library.
+Always run `make check` after implementing a new feature or making changes. This runs:
+1. `cargo check` — type-check Rust workspace
+2. `cd tui && bun run typecheck` — type-check TUI TypeScript (`tsc --noEmit`)
+3. `cargo test -p silt-core` — run core tests
+
+All three must pass before considering a feature complete.
 
 ## Commands
 
