@@ -12,6 +12,7 @@ const HIGHLIGHT_FG = "#000000"
 const ACCENT = "#FFFF00"
 
 type Mode = "write" | "list" | "search" | "edit"
+type Dialog = "settings" | "logs" | null
 type SettingsScreen = "menu" | "providers" | "dropbox" | "gdrive"
 
 function maskToken(token: string): string {
@@ -33,7 +34,7 @@ function hasAnySyncProvider(): boolean {
   return hasDropbox() || hasGDrive()
 }
 
-const SPINNER = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"]
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 const App = () => {
   const renderer = useRenderer()
@@ -46,7 +47,7 @@ const App = () => {
   const [writeText, setWriteText] = useState("")
   const textareaRef = useRef<TextareaRenderable>(null)
   const [status, setStatus] = useState("")
-  const [showSettings, setShowSettings] = useState(false)
+  const [dialog, setDialog] = useState<Dialog>(null)
   const [settingsScreen, setSettingsScreen] = useState<SettingsScreen>("menu")
   const [settingsSelected, setSettingsSelected] = useState(0)
   const [dropboxToken, setDropboxToken] = useState<string | null>(null)
@@ -54,7 +55,6 @@ const App = () => {
   const [authInProgress, setAuthInProgress] = useState(false)
   const spinnerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const spinnerFrameRef = useRef(0)
-  const [showLogs, setShowLogs] = useState(false)
   const [logLines, setLogLines] = useState<string[]>([])
   const [logScroll, setLogScroll] = useState(0)
 
@@ -162,20 +162,21 @@ const App = () => {
 
     // Toggle log viewer
     if (key.ctrl && key.name === "l") {
-      setShowLogs((s) => {
-        if (!s) {
+      setDialog((d) => {
+        if (d !== "logs") {
           setLogLines(getLogs())
           setLogScroll(0)
+          return "logs"
         }
-        return !s
+        return null
       })
       return
     }
 
     // Log viewer keyboard handling
-    if (showLogs) {
+    if (dialog === "logs") {
       if (key.name === "escape") {
-        setShowLogs(false)
+        setDialog(null)
         return
       }
       if (key.name === "j" || key.name === "down") {
@@ -216,18 +217,19 @@ const App = () => {
 
     // Toggle settings overlay
     if (key.ctrl && key.name === "s") {
-      setShowSettings((s) => {
-        if (!s) {
+      setDialog((d) => {
+        if (d !== "settings") {
           setSettingsScreen("menu")
           setSettingsSelected(0)
+          return "settings"
         }
-        return !s
+        return null
       })
       return
     }
 
     // Settings overlay keyboard handling
-    if (showSettings) {
+    if (dialog === "settings") {
       if (key.name === "escape") {
         if (settingsScreen === "dropbox" || settingsScreen === "gdrive") {
           setSettingsScreen("providers")
@@ -236,7 +238,7 @@ const App = () => {
           setSettingsScreen("menu")
           setSettingsSelected(0)
         } else {
-          setShowSettings(false)
+          setDialog(null)
         }
         return
       }
@@ -470,7 +472,7 @@ const App = () => {
             ref={textareaRef}
             placeholder="What's on your mind?"
             initialValue={writeText}
-            focused={writeInsert && !showSettings && !showLogs}
+            focused={writeInsert && dialog === null}
             onContentChange={handleWriteContentChange}
             wrapMode="word"
             backgroundColor={BG}
@@ -484,7 +486,7 @@ const App = () => {
         <box title="Search (Enter to search)" style={{ border: true, height: 3, bg: BG, borderColor: DIM }}>
           <input
             placeholder="Search your entries..."
-            focused={!showSettings && !showLogs}
+            focused={dialog === null}
             onSubmit={handleSearch}
             style={{ bg: BG, fg: FG, focusedBackgroundColor: BG }}
           />
@@ -494,7 +496,7 @@ const App = () => {
         <box title="Edit (Enter to save, Esc to cancel)" style={{ border: true, height: 5, bg: BG, borderColor: DIM }}>
           <input
             value={editingEntry.body}
-            focused={!showSettings && !showLogs}
+            focused={dialog === null}
             onSubmit={handleEdit}
             style={{ bg: BG, fg: FG, focusedBackgroundColor: BG }}
           />
@@ -545,7 +547,7 @@ const App = () => {
       </scrollbox>
 
       {/* Settings overlay */}
-      {showSettings && (
+      {dialog === "settings" && (
         <box
           style={{
             position: "absolute",
@@ -570,51 +572,51 @@ const App = () => {
           }
         >
           {settingsScreen === "menu" && (
-            <box style={{ flexDirection: "column", paddingX: 2, paddingY: 1 }}>
+            <box style={{ flexDirection: "column", flexGrow: 1 }}>
               <box style={{ flexDirection: "row", height: 1, bg: settingsSelected === 0 ? HIGHLIGHT_BG : BG }}>
                 <text content="  Sync Providers" style={{ fg: settingsSelected === 0 ? HIGHLIGHT_FG : FG, bg: settingsSelected === 0 ? HIGHLIGHT_BG : BG }} />
               </box>
-              <text content="" style={{ fg: DIM, height: 1 }} />
+              <text content={" ".repeat(58)} style={{ fg: BG, bg: BG, height: 1 }} />
               <text content="  j/k: navigate  Enter: select  Esc: close" style={{ fg: DIM }} />
             </box>
           )}
 
           {settingsScreen === "providers" && (
-            <box style={{ flexDirection: "column", paddingX: 2, paddingY: 1 }}>
+            <box style={{ flexDirection: "column", flexGrow: 1 }}>
               {menuItems.map((item, i) => (
                 <box key={item.screen} style={{ flexDirection: "row", height: 1, bg: settingsSelected === i ? HIGHLIGHT_BG : BG }}>
                   <text content={`  ${item.label}`} style={{ fg: settingsSelected === i ? HIGHLIGHT_FG : FG, bg: settingsSelected === i ? HIGHLIGHT_BG : BG }} />
                 </box>
               ))}
-              <text content="" style={{ fg: DIM, height: 1 }} />
+              <text content={" ".repeat(58)} style={{ fg: BG, bg: BG, height: 1 }} />
               <text content="  Enter: select  Esc: back" style={{ fg: DIM }} />
             </box>
           )}
 
           {settingsScreen === "dropbox" && (
-            <box style={{ flexDirection: "column", paddingX: 2, paddingY: 1 }}>
+            <box style={{ flexDirection: "column", flexGrow: 1 }}>
               <text content="Dropbox Sync" style={{ fg: FG, height: 1 }} />
               <text content={`Syncs to /Apps/silt/entries/`} style={{ fg: DIM, height: 1 }} />
-              <text content="" style={{ fg: DIM, height: 1 }} />
+              <text content={" ".repeat(58)} style={{ fg: BG, bg: BG, height: 1 }} />
 
               {dropboxToken ? (
                 <box style={{ flexDirection: "column" }}>
                   <text content="Status: Connected" style={{ fg: "#00FF00", height: 1 }} />
                   <text content={`Token:  ${maskToken(dropboxToken)}`} style={{ fg: FG, height: 1 }} />
-                  <text content="" style={{ fg: DIM, height: 1 }} />
+                  <text content={" ".repeat(58)} style={{ fg: BG, bg: BG, height: 1 }} />
                   <text content="  d: disconnect  Esc: back" style={{ fg: DIM }} />
                 </box>
               ) : authInProgress ? (
                 <box style={{ flexDirection: "column" }}>
                   <text content="Waiting for authorization..." style={{ fg: ACCENT, height: 1 }} />
                   <text content="Your browser should open automatically." style={{ fg: DIM, height: 1 }} />
-                  <text content="" style={{ fg: DIM, height: 1 }} />
+                  <text content={" ".repeat(58)} style={{ fg: BG, bg: BG, height: 1 }} />
                   <text content="  Esc: cancel" style={{ fg: DIM }} />
                 </box>
               ) : (
                 <box style={{ flexDirection: "column" }}>
                   <text content="Status: Not connected" style={{ fg: DIM, height: 1 }} />
-                  <text content="" style={{ fg: DIM, height: 1 }} />
+                  <text content={" ".repeat(58)} style={{ fg: BG, bg: BG, height: 1 }} />
                   <text content="  Enter: connect Dropbox  Esc: back" style={{ fg: DIM }} />
                 </box>
               )}
@@ -622,29 +624,29 @@ const App = () => {
           )}
 
           {settingsScreen === "gdrive" && (
-            <box style={{ flexDirection: "column", paddingX: 2, paddingY: 1 }}>
+            <box style={{ flexDirection: "column", flexGrow: 1 }}>
               <text content="Google Drive Sync" style={{ fg: FG, height: 1 }} />
               <text content={`Syncs to My Drive/silt/`} style={{ fg: DIM, height: 1 }} />
-              <text content="" style={{ fg: DIM, height: 1 }} />
+              <text content={" ".repeat(58)} style={{ fg: BG, bg: BG, height: 1 }} />
 
               {gdriveToken ? (
                 <box style={{ flexDirection: "column" }}>
                   <text content="Status: Connected" style={{ fg: "#00FF00", height: 1 }} />
                   <text content={`Token:  ${maskToken(gdriveToken)}`} style={{ fg: FG, height: 1 }} />
-                  <text content="" style={{ fg: DIM, height: 1 }} />
+                  <text content={" ".repeat(58)} style={{ fg: BG, bg: BG, height: 1 }} />
                   <text content="  d: disconnect  Esc: back" style={{ fg: DIM }} />
                 </box>
               ) : authInProgress ? (
                 <box style={{ flexDirection: "column" }}>
                   <text content="Waiting for authorization..." style={{ fg: ACCENT, height: 1 }} />
                   <text content="Your browser should open automatically." style={{ fg: DIM, height: 1 }} />
-                  <text content="" style={{ fg: DIM, height: 1 }} />
+                  <text content={" ".repeat(58)} style={{ fg: BG, bg: BG, height: 1 }} />
                   <text content="  Esc: cancel" style={{ fg: DIM }} />
                 </box>
               ) : (
                 <box style={{ flexDirection: "column" }}>
                   <text content="Status: Not connected" style={{ fg: DIM, height: 1 }} />
-                  <text content="" style={{ fg: DIM, height: 1 }} />
+                  <text content={" ".repeat(58)} style={{ fg: BG, bg: BG, height: 1 }} />
                   <text content="  Enter: connect Google Drive  Esc: back" style={{ fg: DIM }} />
                 </box>
               )}
@@ -654,7 +656,7 @@ const App = () => {
       )}
 
       {/* Log viewer overlay */}
-      {showLogs && (
+      {dialog === "logs" && (
         <box
           style={{
             position: "absolute",
