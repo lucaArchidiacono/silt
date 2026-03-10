@@ -98,6 +98,7 @@ impl DropboxSync {
     /// Refresh the access token using the stored refresh token.
     /// Returns the new access token on success.
     fn refresh_access_token(&self) -> Result<String> {
+        log::info!("[dropbox] refreshing access token");
         let refresh = self.refresh_token.as_ref()
             .ok_or_else(|| anyhow!("no refresh token available — please re-authorize Dropbox"))?;
         let app_key = self.app_key.as_ref()
@@ -286,6 +287,7 @@ impl DropboxSync {
             .and_then(|n| n.to_str())
             .ok_or_else(|| anyhow!("invalid filename: {:?}", local_path))?;
 
+        log::info!("[dropbox] uploading {}", filename);
         let data = fs::read(local_path)
             .with_context(|| format!("reading {}", local_path.display()))?;
 
@@ -310,16 +312,27 @@ impl DropboxSync {
             .with_context(|| format!("uploading {}", filename))?;
 
         if resp.status().as_u16() == 401 && allow_retry && self.refresh_token.is_some() {
+            log::warn!("[dropbox] 401 on upload {}, refreshing token", filename);
             self.refresh_access_token()?;
+            return self.upload_file_inner(local_path, false);
+        }
+
+        // Retry once on transient server errors
+        if allow_retry && matches!(resp.status().as_u16(), 429 | 500 | 502 | 503) {
+            let code = resp.status().as_u16();
+            log::warn!("[dropbox] {} on upload {}, retrying in 1s", code, filename);
+            std::thread::sleep(std::time::Duration::from_secs(1));
             return self.upload_file_inner(local_path, false);
         }
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().unwrap_or_default();
+            log::error!("[dropbox] upload failed for {} ({}): {}", filename, status, body);
             return Err(anyhow!("upload error for {} ({}): {}", filename, status, body));
         }
 
+        log::info!("[dropbox] uploaded {}", filename);
         Ok(())
     }
 
@@ -370,21 +383,25 @@ impl DropboxSync {
 
 impl SyncAdapter for DropboxSync {
     fn push(&self, changed: &[PathBuf]) -> Result<()> {
+        log::info!("[dropbox] pushing {} files", changed.len());
         self.set_status(SyncStatus::Syncing);
 
         for path in changed {
             if let Err(e) = self.upload_file(path) {
+                log::error!("[dropbox] push failed: {}", e);
                 let msg = format!("{}", e);
                 self.set_status(SyncStatus::Error(msg));
                 return Err(e);
             }
         }
 
+        log::info!("[dropbox] push complete ({} files)", changed.len());
         self.set_status(SyncStatus::Idle);
         Ok(())
     }
 
     fn pull(&self) -> Result<Vec<PathBuf>> {
+        log::info!("[dropbox] pulling from Dropbox");
         self.set_status(SyncStatus::Syncing);
 
         let remote_files = match self.list_remote_files() {

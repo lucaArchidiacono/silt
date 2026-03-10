@@ -2,7 +2,7 @@ import { createCliRenderer } from "@opentui/core"
 import type { TextareaRenderable } from "@opentui/core"
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useState, useCallback, useRef } from "react"
-import { listEntries, newEntry, searchEntries, editEntry, deleteEntry, getConfig, setConfig, authDropbox, authGoogleDrive, syncPushEntries, syncPullAsync, syncPushAll, syncPushEntriesGDrive, syncPullAsyncGDrive, syncPushAllGDrive, rebuildIndex, type Entry } from "./silt"
+import { listEntries, newEntry, searchEntries, editEntry, deleteEntry, getConfig, setConfig, authDropbox, authGoogleDrive, syncPushEntries, syncPullAsync, syncPushAll, syncPushEntriesGDrive, syncPullAsyncGDrive, syncPushAllGDrive, rebuildIndex, getLogs, clearLogs, type Entry } from "./silt"
 
 const BG = "#000000"
 const FG = "#CCCCCC"
@@ -54,6 +54,9 @@ const App = () => {
   const [authInProgress, setAuthInProgress] = useState(false)
   const spinnerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const spinnerFrameRef = useRef(0)
+  const [showLogs, setShowLogs] = useState(false)
+  const [logLines, setLogLines] = useState<string[]>([])
+  const [logScroll, setLogScroll] = useState(0)
 
   const startSync = useCallback((label: string, promise: Promise<number>, onDone?: (count: number) => void) => {
     // Start spinner
@@ -154,6 +157,60 @@ const App = () => {
     }
     if (key.ctrl && key.name === "p" && hasAnySyncProvider()) {
       pullFromAll((count) => setStatus(count > 0 ? `Pulled ${count} entries.` : "Up to date."))
+      return
+    }
+
+    // Toggle log viewer
+    if (key.ctrl && key.name === "l") {
+      setShowLogs((s) => {
+        if (!s) {
+          setLogLines(getLogs())
+          setLogScroll(0)
+        }
+        return !s
+      })
+      return
+    }
+
+    // Log viewer keyboard handling
+    if (showLogs) {
+      if (key.name === "escape") {
+        setShowLogs(false)
+        return
+      }
+      if (key.name === "j" || key.name === "down") {
+        setLogScroll((s) => Math.min(s + 1, Math.max(0, logLines.length - 1)))
+        return
+      }
+      if (key.name === "k" || key.name === "up") {
+        setLogScroll((s) => Math.max(s - 1, 0))
+        return
+      }
+      if (key.name === "g" && key.shift) {
+        setLogScroll(Math.max(0, logLines.length - 1))
+        return
+      }
+      if (key.name === "g" && !key.shift) {
+        setLogScroll(0)
+        return
+      }
+      if (key.name === "r") {
+        setLogLines(getLogs())
+        return
+      }
+      if (key.name === "y") {
+        const text = logLines.join("\n")
+        Bun.spawn(["pbcopy"], { stdin: new Blob([text]) })
+        setStatus("Logs copied to clipboard.")
+        return
+      }
+      if (key.name === "x") {
+        clearLogs()
+        setLogLines([])
+        setLogScroll(0)
+        setStatus("Logs cleared.")
+        return
+      }
       return
     }
 
@@ -395,7 +452,7 @@ const App = () => {
             bg: mode === "search" ? "#FFFFFF" : BG,
           }}
         />
-        <text content="  Tab: switch  Ctrl+S: settings  Ctrl+U: push  Ctrl+P: pull  Ctrl+Q: quit" style={{ fg: DIM, bg: BG }} />
+        <text content="  Tab: switch  Ctrl+S: settings  Ctrl+U: push  Ctrl+P: pull  Ctrl+L: logs  Ctrl+Q: quit" style={{ fg: DIM, bg: BG }} />
       </box>
 
       {/* Write mode: textarea with normal/insert sub-modes */}
@@ -413,7 +470,7 @@ const App = () => {
             ref={textareaRef}
             placeholder="What's on your mind?"
             initialValue={writeText}
-            focused={writeInsert && !showSettings}
+            focused={writeInsert && !showSettings && !showLogs}
             onContentChange={handleWriteContentChange}
             wrapMode="word"
             backgroundColor={BG}
@@ -427,7 +484,7 @@ const App = () => {
         <box title="Search (Enter to search)" style={{ border: true, height: 3, bg: BG, borderColor: DIM }}>
           <input
             placeholder="Search your entries..."
-            focused={!showSettings}
+            focused={!showSettings && !showLogs}
             onSubmit={handleSearch}
             style={{ bg: BG, fg: FG, focusedBackgroundColor: BG }}
           />
@@ -437,7 +494,7 @@ const App = () => {
         <box title="Edit (Enter to save, Esc to cancel)" style={{ border: true, height: 5, bg: BG, borderColor: DIM }}>
           <input
             value={editingEntry.body}
-            focused={!showSettings}
+            focused={!showSettings && !showLogs}
             onSubmit={handleEdit}
             style={{ bg: BG, fg: FG, focusedBackgroundColor: BG }}
           />
@@ -593,6 +650,48 @@ const App = () => {
               )}
             </box>
           )}
+        </box>
+      )}
+
+      {/* Log viewer overlay */}
+      {showLogs && (
+        <box
+          style={{
+            position: "absolute",
+            width: dimensions.width - 4,
+            height: Math.max(12, Math.floor(dimensions.height * 0.6)),
+            left: 2,
+            top: Math.floor(dimensions.height * 0.2),
+            border: true,
+            borderColor: ACCENT,
+            bg: BG,
+            flexDirection: "column",
+            zIndex: 20,
+          }}
+          title={`Logs (${logLines.length}) — j/k: scroll  g/G: top/bottom  r: refresh  y: copy  x: clear  Esc: close`}
+        >
+          {(() => {
+            const logHeight = Math.max(12, Math.floor(dimensions.height * 0.6)) - 2
+            const logWidth = dimensions.width - 6
+            const lines = logLines.length === 0
+              ? [{ text: "  No logs yet.", fg: DIM, bg: BG }]
+              : logLines.map((line, i) => {
+                  const isSelected = i === logScroll
+                  const fg = line.includes("ERROR") ? "#FF5555" : line.includes("WARN") ? ACCENT : FG
+                  return { text: `  ${line}`, fg: isSelected ? HIGHLIGHT_FG : fg, bg: isSelected ? HIGHLIGHT_BG : BG }
+                })
+            // Pad with blank lines to fill the box
+            while (lines.length < logHeight) {
+              lines.push({ text: " ".repeat(logWidth), fg: BG, bg: BG })
+            }
+            return (
+              <scrollbox style={{ flexGrow: 1, bg: BG }} scrollTop={logScroll}>
+                {lines.map((l, i) => (
+                  <text key={i} content={l.text.padEnd(logWidth, " ")} style={{ fg: l.fg, bg: l.bg, height: 1 }} />
+                ))}
+              </scrollbox>
+            )
+          })()}
         </box>
       )}
 

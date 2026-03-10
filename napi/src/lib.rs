@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use napi::bindgen_prelude::AsyncTask;
 use napi::Task;
@@ -9,6 +10,49 @@ use silt_core::dropbox::DropboxSync;
 use silt_core::google_drive::GoogleDriveSync;
 use silt_core::sync::SyncAdapter;
 use silt_core::Silt;
+
+// --- Log collector ---
+
+static LOG_BUFFER: std::sync::LazyLock<Mutex<Vec<String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+
+struct SiltLogger;
+
+impl log::Log for SiltLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            let now = chrono::Local::now().format("%H:%M:%S");
+            let line = format!("[{}] {} {}", now, record.level(), record.args());
+            if let Ok(mut buf) = LOG_BUFFER.lock() {
+                buf.push(line);
+            }
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static LOGGER: SiltLogger = SiltLogger;
+
+fn init_logger() {
+    let _ = log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Info));
+}
+
+#[napi]
+pub fn get_logs() -> Vec<String> {
+    LOG_BUFFER.lock().map(|buf| buf.clone()).unwrap_or_default()
+}
+
+#[napi]
+pub fn clear_logs() {
+    if let Ok(mut buf) = LOG_BUFFER.lock() {
+        buf.clear();
+    }
+}
 
 // --- Entry data transfer object ---
 
@@ -46,7 +90,9 @@ fn data_dir() -> PathBuf {
 impl SiltSession {
     #[napi(constructor)]
     pub fn new() -> napi::Result<Self> {
+        init_logger();
         let silt = Silt::open(&data_dir())?;
+        log::info!("silt session opened");
         Ok(Self {
             inner: RefCell::new(silt),
         })

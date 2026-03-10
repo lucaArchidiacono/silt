@@ -107,6 +107,7 @@ impl GoogleDriveSync {
     }
 
     fn refresh_access_token(&self) -> Result<String> {
+        log::info!("[gdrive] refreshing access token");
         let refresh = self
             .refresh_token
             .as_ref()
@@ -135,6 +136,7 @@ impl GoogleDriveSync {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().unwrap_or_default();
+            log::error!("[gdrive] token refresh failed ({}): {}", status, body);
             return Err(anyhow!(
                 "Google token refresh failed ({}): {} — please re-authorize",
                 status,
@@ -144,6 +146,7 @@ impl GoogleDriveSync {
 
         let data: TokenResponse = resp.json().context("parsing token refresh response")?;
         *self.token.lock().unwrap() = data.access_token.clone();
+        log::info!("[gdrive] token refreshed successfully");
         Ok(data.access_token)
     }
 
@@ -165,6 +168,7 @@ impl GoogleDriveSync {
     }
 
     fn ensure_folder_inner(&self, allow_retry: bool) -> Result<String> {
+        log::info!("[gdrive] looking up silt folder");
         // Search for existing folder
         let query = format!(
             "name='{}' and mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=false",
@@ -196,9 +200,11 @@ impl GoogleDriveSync {
 
         let list: FileList = resp.json().context("parsing folder search")?;
         if let Some(folder) = list.files.first() {
+            log::info!("[gdrive] found existing silt folder: {}", folder.id);
             return Ok(folder.id.clone());
         }
 
+        log::info!("[gdrive] creating silt folder");
         // Create folder
         let meta = FileMetadata {
             name: FOLDER_NAME.to_string(),
@@ -330,6 +336,7 @@ impl GoogleDriveSync {
             .and_then(|n| n.to_str())
             .ok_or_else(|| anyhow!("invalid filename: {:?}", local_path))?;
 
+        log::info!("[gdrive] uploading {}", filename);
         let folder_id = self.ensure_folder()?;
         let data = fs::read(local_path)
             .with_context(|| format!("reading {}", local_path.display()))?;
@@ -378,6 +385,7 @@ impl GoogleDriveSync {
         };
 
         if resp.status().as_u16() == 401 && allow_retry && self.refresh_token.is_some() {
+            log::warn!("[gdrive] 401 on upload {}, refreshing token", filename);
             self.refresh_access_token()?;
             return self.upload_file_inner(local_path, false);
         }
@@ -385,6 +393,7 @@ impl GoogleDriveSync {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().unwrap_or_default();
+            log::error!("[gdrive] upload failed for {} ({}): {}", filename, status, body);
             return Err(anyhow!(
                 "upload error for {} ({}): {}",
                 filename,
@@ -393,6 +402,7 @@ impl GoogleDriveSync {
             ));
         }
 
+        log::info!("[gdrive] uploaded {}", filename);
         Ok(())
     }
 
@@ -406,6 +416,7 @@ impl GoogleDriveSync {
         file_id: &str,
         allow_retry: bool,
     ) -> Result<PathBuf> {
+        log::info!("[gdrive] downloading {}", filename);
         let resp = self
             .client
             .get(format!("{}/files/{}", DRIVE_API, file_id))
@@ -441,21 +452,25 @@ impl GoogleDriveSync {
 
 impl SyncAdapter for GoogleDriveSync {
     fn push(&self, changed: &[PathBuf]) -> Result<()> {
+        log::info!("[gdrive] pushing {} files", changed.len());
         self.set_status(SyncStatus::Syncing);
 
         for path in changed {
             if let Err(e) = self.upload_file(path) {
+                log::error!("[gdrive] push failed: {}", e);
                 let msg = format!("{}", e);
                 self.set_status(SyncStatus::Error(msg));
                 return Err(e);
             }
         }
 
+        log::info!("[gdrive] push complete ({} files)", changed.len());
         self.set_status(SyncStatus::Idle);
         Ok(())
     }
 
     fn pull(&self) -> Result<Vec<PathBuf>> {
+        log::info!("[gdrive] pulling from Google Drive");
         self.set_status(SyncStatus::Syncing);
 
         let remote_files = match self.list_remote_files() {
