@@ -2,7 +2,7 @@ import { createCliRenderer } from "@opentui/core"
 import type { TextareaRenderable } from "@opentui/core"
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useState, useCallback, useRef } from "react"
-import { listEntries, newEntry, searchEntries, editEntry, deleteEntry, getConfig, setConfig, authDropbox, syncPushEntries, syncPullAsync, rebuildIndex, type Entry } from "./silt"
+import { listEntries, newEntry, searchEntries, editEntry, deleteEntry, getConfig, setConfig, authDropbox, authGoogleDrive, syncPushEntries, syncPullAsync, syncPushAll, syncPushEntriesGDrive, syncPullAsyncGDrive, syncPushAllGDrive, rebuildIndex, type Entry } from "./silt"
 
 const BG = "#000000"
 const FG = "#CCCCCC"
@@ -12,7 +12,7 @@ const HIGHLIGHT_FG = "#000000"
 const ACCENT = "#FFFF00"
 
 type Mode = "write" | "list" | "search" | "edit"
-type SettingsScreen = "menu" | "providers" | "dropbox"
+type SettingsScreen = "menu" | "providers" | "dropbox" | "gdrive"
 
 function maskToken(token: string): string {
   if (token.length <= 8) return "****"
@@ -24,7 +24,16 @@ function hasDropbox(): boolean {
   return token !== null && token !== ""
 }
 
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+function hasGDrive(): boolean {
+  const token = getConfig("google_drive_token")
+  return token !== null && token !== ""
+}
+
+function hasAnySyncProvider(): boolean {
+  return hasDropbox() || hasGDrive()
+}
+
+const SPINNER = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"]
 
 const App = () => {
   const renderer = useRenderer()
@@ -41,6 +50,7 @@ const App = () => {
   const [settingsScreen, setSettingsScreen] = useState<SettingsScreen>("menu")
   const [settingsSelected, setSettingsSelected] = useState(0)
   const [dropboxToken, setDropboxToken] = useState<string | null>(null)
+  const [gdriveToken, setGdriveToken] = useState<string | null>(null)
   const [authInProgress, setAuthInProgress] = useState(false)
   const spinnerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const spinnerFrameRef = useRef(0)
@@ -67,16 +77,48 @@ const App = () => {
       })
   }, [])
 
-  // Pull from Dropbox on startup
-  const startupPullDone = useRef(false)
-  if (!startupPullDone.current && hasDropbox()) {
-    startupPullDone.current = true
-    startSync("Pulling from Dropbox...", syncPullAsync(), (count) => {
+  // Push specific entries to all connected providers
+  const pushToAll = useCallback((ids: string[], onDone?: () => void) => {
+    const promises: Promise<number>[] = []
+    if (hasDropbox()) promises.push(syncPushEntries(ids))
+    if (hasGDrive()) promises.push(syncPushEntriesGDrive(ids))
+    if (promises.length === 0) {
+      onDone?.()
+      return
+    }
+    startSync("Syncing...", Promise.all(promises).then((counts) => counts.reduce((a, b) => a + b, 0)), onDone)
+  }, [startSync])
+
+  // Push ALL entries to all connected providers
+  const pushAllToAll = useCallback((onDone?: (count: number) => void) => {
+    const promises: Promise<number>[] = []
+    if (hasDropbox()) promises.push(syncPushAll())
+    if (hasGDrive()) promises.push(syncPushAllGDrive())
+    if (promises.length === 0) return
+    startSync("Pushing all entries...", Promise.all(promises).then((counts) => counts.reduce((a, b) => a + b, 0)), onDone)
+  }, [startSync])
+
+  // Pull from all connected providers
+  const pullFromAll = useCallback((onDone?: (count: number) => void) => {
+    const promises: Promise<number>[] = []
+    if (hasDropbox()) promises.push(syncPullAsync())
+    if (hasGDrive()) promises.push(syncPullAsyncGDrive())
+    if (promises.length === 0) return
+    startSync("Pulling...", Promise.all(promises).then((counts) => counts.reduce((a, b) => a + b, 0)), (count) => {
       if (count > 0) {
         rebuildIndex()
         setEntries(listEntries())
       }
-      setStatus(count > 0 ? `Pulled ${count} entries from Dropbox.` : "Up to date.")
+      onDone?.(count)
+    })
+  }, [startSync])
+
+  // Pull from all providers on startup
+  const startupPullDone = useRef(false)
+  if (!startupPullDone.current && hasAnySyncProvider()) {
+    startupPullDone.current = true
+    pullFromAll((count) => {
+      setStatus(count > 0 ? `Pulled ${count} entries.` : "Up to date.")
     })
   }
 
@@ -84,7 +126,7 @@ const App = () => {
     settingsScreen === "menu"
       ? [{ label: "Sync Providers", screen: "providers" }]
       : settingsScreen === "providers"
-        ? [{ label: "Dropbox", screen: "dropbox" }]
+        ? [{ label: "Dropbox", screen: "dropbox" }, { label: "Google Drive", screen: "gdrive" }]
         : []
 
   useKeyboard((key) => {
@@ -105,6 +147,16 @@ const App = () => {
       return
     }
 
+    // Manual sync: Ctrl+U = push all, Ctrl+P = pull all
+    if (key.ctrl && key.name === "u" && hasAnySyncProvider()) {
+      pushAllToAll((count) => setStatus(`Pushed ${count} entries.`))
+      return
+    }
+    if (key.ctrl && key.name === "p" && hasAnySyncProvider()) {
+      pullFromAll((count) => setStatus(count > 0 ? `Pulled ${count} entries.` : "Up to date."))
+      return
+    }
+
     // Toggle settings overlay
     if (key.ctrl && key.name === "s") {
       setShowSettings((s) => {
@@ -120,7 +172,7 @@ const App = () => {
     // Settings overlay keyboard handling
     if (showSettings) {
       if (key.name === "escape") {
-        if (settingsScreen === "dropbox") {
+        if (settingsScreen === "dropbox" || settingsScreen === "gdrive") {
           setSettingsScreen("providers")
           setSettingsSelected(0)
         } else if (settingsScreen === "providers") {
@@ -140,7 +192,9 @@ const App = () => {
             .then((token) => {
               setDropboxToken(token)
               setAuthInProgress(false)
-              setStatus("Dropbox connected!")
+              startSync("Pushing all entries to Dropbox...", syncPushAll(), (count) => {
+                setStatus(`Dropbox connected! Pushed ${count} entries.`)
+              })
             })
             .catch(() => {
               setAuthInProgress(false)
@@ -156,6 +210,33 @@ const App = () => {
         return
       }
 
+      if (settingsScreen === "gdrive") {
+        if (key.name === "return" && !gdriveToken && !authInProgress) {
+          setAuthInProgress(true)
+          setStatus("Opening browser...")
+          authGoogleDrive()
+            .then((token) => {
+              setGdriveToken(token)
+              setAuthInProgress(false)
+              startSync("Pushing all entries to Google Drive...", syncPushAllGDrive(), (count) => {
+                setStatus(`Google Drive connected! Pushed ${count} entries.`)
+              })
+            })
+            .catch(() => {
+              setAuthInProgress(false)
+              setStatus("Google Drive authorization failed.")
+            })
+        }
+        if (key.name === "d" && gdriveToken) {
+          setConfig("google_drive_token", "")
+          setConfig("google_drive_refresh_token", "")
+          setConfig("google_drive_folder_id", "")
+          setGdriveToken(null)
+          setStatus("Google Drive disconnected.")
+        }
+        return
+      }
+
       // Menu / providers navigation
       if (key.name === "j" || key.name === "down") {
         setSettingsSelected((s) => Math.min(s + 1, menuItems.length - 1))
@@ -167,6 +248,8 @@ const App = () => {
         const target = menuItems[settingsSelected].screen
         if (target === "dropbox") {
           setDropboxToken(getConfig("dropbox_token"))
+        } else if (target === "gdrive") {
+          setGdriveToken(getConfig("google_drive_token"))
         }
         setSettingsScreen(target)
         setSettingsSelected(0)
@@ -219,10 +302,8 @@ const App = () => {
           setEntries(listEntries())
           textareaRef.current?.clear()
           setWriteText("")
-          if (hasDropbox()) {
-            startSync("Syncing...", syncPushEntries([entry.id]), () => {
-              setStatus("Entry saved & synced.")
-            })
+          if (hasAnySyncProvider()) {
+            pushToAll([entry.id], () => setStatus("Entry saved & synced."))
           } else {
             setStatus("Entry saved.")
           }
@@ -246,10 +327,8 @@ const App = () => {
         deleteEntry(entry.id)
         setEntries(listEntries())
         setSelected((s) => Math.max(0, Math.min(s, entries.length - 2)))
-        if (hasDropbox()) {
-          startSync("Syncing...", syncPushEntries([entry.id]), () => {
-            setStatus("Deleted & synced.")
-          })
+        if (hasAnySyncProvider()) {
+          pushToAll([entry.id], () => setStatus("Deleted & synced."))
         } else {
           setStatus("Deleted entry.")
         }
@@ -280,15 +359,13 @@ const App = () => {
       setEntries(listEntries())
       setEditingEntry(null)
       setMode("list")
-      if (hasDropbox()) {
-        startSync("Syncing...", syncPushEntries([editingEntry.id]), () => {
-          setStatus("Entry updated & synced.")
-        })
+      if (hasAnySyncProvider()) {
+        pushToAll([editingEntry.id], () => setStatus("Entry updated & synced."))
       } else {
         setStatus("Entry updated.")
       }
     },
-    [editingEntry, startSync],
+    [editingEntry, startSync, pushToAll],
   )
 
   const isListActive = mode === "list" || mode === "edit"
@@ -318,7 +395,7 @@ const App = () => {
             bg: mode === "search" ? "#FFFFFF" : BG,
           }}
         />
-        <text content="  Tab: switch  Ctrl+S: settings  Ctrl+Q: quit" style={{ fg: DIM, bg: BG }} />
+        <text content="  Tab: switch  Ctrl+S: settings  Ctrl+U: push  Ctrl+P: pull  Ctrl+Q: quit" style={{ fg: DIM, bg: BG }} />
       </box>
 
       {/* Write mode: textarea with normal/insert sub-modes */}
@@ -430,7 +507,9 @@ const App = () => {
               ? "Settings"
               : settingsScreen === "providers"
                 ? "Sync Providers"
-                : "Dropbox"
+                : settingsScreen === "dropbox"
+                  ? "Dropbox"
+                  : "Google Drive"
           }
         >
           {settingsScreen === "menu" && (
@@ -445,9 +524,11 @@ const App = () => {
 
           {settingsScreen === "providers" && (
             <box style={{ flexDirection: "column", paddingX: 2, paddingY: 1 }}>
-              <box style={{ flexDirection: "row", height: 1, bg: settingsSelected === 0 ? HIGHLIGHT_BG : BG }}>
-                <text content="  Dropbox" style={{ fg: settingsSelected === 0 ? HIGHLIGHT_FG : FG, bg: settingsSelected === 0 ? HIGHLIGHT_BG : BG }} />
-              </box>
+              {menuItems.map((item, i) => (
+                <box key={item.screen} style={{ flexDirection: "row", height: 1, bg: settingsSelected === i ? HIGHLIGHT_BG : BG }}>
+                  <text content={`  ${item.label}`} style={{ fg: settingsSelected === i ? HIGHLIGHT_FG : FG, bg: settingsSelected === i ? HIGHLIGHT_BG : BG }} />
+                </box>
+              ))}
               <text content="" style={{ fg: DIM, height: 1 }} />
               <text content="  Enter: select  Esc: back" style={{ fg: DIM }} />
             </box>
@@ -478,6 +559,36 @@ const App = () => {
                   <text content="Status: Not connected" style={{ fg: DIM, height: 1 }} />
                   <text content="" style={{ fg: DIM, height: 1 }} />
                   <text content="  Enter: connect Dropbox  Esc: back" style={{ fg: DIM }} />
+                </box>
+              )}
+            </box>
+          )}
+
+          {settingsScreen === "gdrive" && (
+            <box style={{ flexDirection: "column", paddingX: 2, paddingY: 1 }}>
+              <text content="Google Drive Sync" style={{ fg: FG, height: 1 }} />
+              <text content={`Syncs to My Drive/silt/`} style={{ fg: DIM, height: 1 }} />
+              <text content="" style={{ fg: DIM, height: 1 }} />
+
+              {gdriveToken ? (
+                <box style={{ flexDirection: "column" }}>
+                  <text content="Status: Connected" style={{ fg: "#00FF00", height: 1 }} />
+                  <text content={`Token:  ${maskToken(gdriveToken)}`} style={{ fg: FG, height: 1 }} />
+                  <text content="" style={{ fg: DIM, height: 1 }} />
+                  <text content="  d: disconnect  Esc: back" style={{ fg: DIM }} />
+                </box>
+              ) : authInProgress ? (
+                <box style={{ flexDirection: "column" }}>
+                  <text content="Waiting for authorization..." style={{ fg: ACCENT, height: 1 }} />
+                  <text content="Your browser should open automatically." style={{ fg: DIM, height: 1 }} />
+                  <text content="" style={{ fg: DIM, height: 1 }} />
+                  <text content="  Esc: cancel" style={{ fg: DIM }} />
+                </box>
+              ) : (
+                <box style={{ flexDirection: "column" }}>
+                  <text content="Status: Not connected" style={{ fg: DIM, height: 1 }} />
+                  <text content="" style={{ fg: DIM, height: 1 }} />
+                  <text content="  Enter: connect Google Drive  Esc: back" style={{ fg: DIM }} />
                 </box>
               )}
             </box>

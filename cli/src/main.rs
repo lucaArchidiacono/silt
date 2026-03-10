@@ -88,6 +88,74 @@ fn save_refreshed_token(sync: &silt_core::dropbox::DropboxSync, original_token: 
     }
 }
 
+// --- Google Drive helpers ---
+
+const GDRIVE_CLIENT_ID: &str = "472212712976-0re1irdle5up1o6cm1v1ujma9eppufr3.apps.googleusercontent.com";
+const GDRIVE_CLIENT_SECRET: &str = "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";
+
+fn get_gdrive_token() -> Option<String> {
+    read_settings()
+        .get("google_drive_token")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+fn make_gdrive_sync(token: String, entries_dir: &std::path::Path) -> silt_core::google_drive::GoogleDriveSync {
+    let settings = read_settings();
+    let sync = silt_core::google_drive::GoogleDriveSync::new(token, entries_dir);
+
+    let refresh = settings
+        .get("google_drive_refresh_token")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    let sync = if let Some(refresh) = refresh {
+        sync.with_refresh(refresh, GDRIVE_CLIENT_ID.to_string(), GDRIVE_CLIENT_SECRET.to_string())
+    } else {
+        sync
+    };
+
+    let folder_id = settings
+        .get("google_drive_folder_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    if let Some(fid) = folder_id {
+        sync.with_folder_id(fid)
+    } else {
+        sync
+    }
+}
+
+fn save_refreshed_gdrive_token(sync: &silt_core::google_drive::GoogleDriveSync, original_token: &str) {
+    let mut changed = false;
+    let mut settings = read_settings();
+
+    let current = sync.current_token();
+    if current != original_token {
+        settings.insert("google_drive_token".into(), serde_json::Value::String(current));
+        changed = true;
+    }
+
+    if let Some(folder_id) = sync.current_folder_id() {
+        let existing = settings
+            .get("google_drive_folder_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if existing != folder_id {
+            settings.insert("google_drive_folder_id".into(), serde_json::Value::String(folder_id));
+            changed = true;
+        }
+    }
+
+    if changed {
+        let _ = write_settings(&settings);
+    }
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("help");
@@ -156,30 +224,61 @@ fn main() -> Result<()> {
         }
         "sync" => {
             let action = args.get(2).map(|s| s.as_str()).unwrap_or("help");
-            let token = get_dropbox_token()?;
+            let has_dropbox = get_dropbox_token().is_ok();
+            let has_gdrive = get_gdrive_token().is_some();
+
+            if !has_dropbox && !has_gdrive {
+                return Err(anyhow!("no sync provider configured. Connect Dropbox or Google Drive first."));
+            }
 
             match action {
                 "push" => {
                     let silt = Silt::open(&data_dir())?;
-                    let sync = make_dropbox_sync(token.clone(), silt.entries_dir());
                     let paths: Vec<PathBuf> = std::fs::read_dir(silt.entries_dir())?
                         .filter_map(|e| e.ok())
                         .map(|e| e.path())
                         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("md"))
                         .collect();
-                    sync.push(&paths)?;
-                    save_refreshed_token(&sync, &token);
-                    println!("{{\"pushed\":{}}}", paths.len());
+                    let mut total = 0u32;
+
+                    if let Ok(token) = get_dropbox_token() {
+                        let sync = make_dropbox_sync(token.clone(), silt.entries_dir());
+                        sync.push(&paths)?;
+                        save_refreshed_token(&sync, &token);
+                        total += paths.len() as u32;
+                    }
+
+                    if let Some(token) = get_gdrive_token() {
+                        let sync = make_gdrive_sync(token.clone(), silt.entries_dir());
+                        sync.push(&paths)?;
+                        save_refreshed_gdrive_token(&sync, &token);
+                        total += paths.len() as u32;
+                    }
+
+                    println!("{{\"pushed\":{}}}", total);
                 }
                 "pull" => {
                     let mut silt = Silt::open(&data_dir())?;
-                    let sync = make_dropbox_sync(token.clone(), silt.entries_dir());
-                    let pulled = sync.pull()?;
-                    save_refreshed_token(&sync, &token);
-                    if !pulled.is_empty() {
+                    let mut all_pulled = Vec::new();
+
+                    if let Ok(token) = get_dropbox_token() {
+                        let sync = make_dropbox_sync(token.clone(), silt.entries_dir());
+                        let pulled = sync.pull()?;
+                        save_refreshed_token(&sync, &token);
+                        all_pulled.extend(pulled);
+                    }
+
+                    if let Some(token) = get_gdrive_token() {
+                        let sync = make_gdrive_sync(token.clone(), silt.entries_dir());
+                        let pulled = sync.pull()?;
+                        save_refreshed_gdrive_token(&sync, &token);
+                        all_pulled.extend(pulled);
+                    }
+
+                    if !all_pulled.is_empty() {
                         silt.rebuild_index()?;
                     }
-                    let filenames: Vec<&str> = pulled
+                    let filenames: Vec<&str> = all_pulled
                         .iter()
                         .filter_map(|p| p.file_name()?.to_str())
                         .collect();
@@ -193,13 +292,29 @@ fn main() -> Result<()> {
                 }
                 "status" => {
                     let silt = Silt::open(&data_dir())?;
-                    let sync = make_dropbox_sync(token, silt.entries_dir());
-                    let status = match sync.status() {
-                        silt_core::sync::SyncStatus::Idle => "idle",
-                        silt_core::sync::SyncStatus::Syncing => "syncing",
-                        silt_core::sync::SyncStatus::Error(_) => "error",
-                    };
-                    println!("{{\"status\":\"{status}\"}}");
+                    let mut providers = serde_json::Map::new();
+
+                    if let Ok(token) = get_dropbox_token() {
+                        let sync = make_dropbox_sync(token, silt.entries_dir());
+                        let s = match sync.status() {
+                            silt_core::sync::SyncStatus::Idle => "idle",
+                            silt_core::sync::SyncStatus::Syncing => "syncing",
+                            silt_core::sync::SyncStatus::Error(_) => "error",
+                        };
+                        providers.insert("dropbox".into(), serde_json::Value::String(s.into()));
+                    }
+
+                    if let Some(token) = get_gdrive_token() {
+                        let sync = make_gdrive_sync(token, silt.entries_dir());
+                        let s = match sync.status() {
+                            silt_core::sync::SyncStatus::Idle => "idle",
+                            silt_core::sync::SyncStatus::Syncing => "syncing",
+                            silt_core::sync::SyncStatus::Error(_) => "error",
+                        };
+                        providers.insert("google_drive".into(), serde_json::Value::String(s.into()));
+                    }
+
+                    println!("{}", serde_json::to_string(&providers)?);
                 }
                 _ => {
                     eprintln!("usage: silt sync <push|pull|status>");

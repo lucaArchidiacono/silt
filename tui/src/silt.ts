@@ -1,4 +1,4 @@
-import { SiltSession, getConfig as nativeGetConfig, setConfig as nativeSetConfig, syncPushEntries as nativeSyncPushEntries, syncPullAsync as nativeSyncPullAsync, type JsEntry } from "../../napi"
+import { SiltSession, getConfig as nativeGetConfig, setConfig as nativeSetConfig, syncPushEntries as nativeSyncPushEntries, syncPullAsync as nativeSyncPullAsync, syncPushAll as nativeSyncPushAll, syncPushEntriesGdrive as nativeSyncPushEntriesGdrive, syncPullAsyncGdrive as nativeSyncPullAsyncGdrive, syncPushAllGdrive as nativeSyncPushAllGdrive, type JsEntry } from "../../napi"
 
 export type Entry = JsEntry
 
@@ -38,6 +38,10 @@ export function rebuildIndex(): void {
 
 export function syncPushEntries(ids: string[]): Promise<number> {
   return nativeSyncPushEntries(ids) as Promise<number>
+}
+
+export function syncPushAll(): Promise<number> {
+  return nativeSyncPushAll() as Promise<number>
 }
 
 export function syncPullAsync(): Promise<number> {
@@ -169,4 +173,126 @@ export async function authDropbox(): Promise<string> {
 
 export function cancelAuth(): void {
   // Placeholder — the timeout in authDropbox handles cleanup
+}
+
+// --- Google Drive ---
+
+const GDRIVE_CLIENT_ID = "472212712976-0re1irdle5up1o6cm1v1ujma9eppufr3.apps.googleusercontent.com"
+const GDRIVE_CLIENT_SECRET = "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"
+const GDRIVE_REDIRECT_PORT = 18457
+const GDRIVE_REDIRECT_URI = `http://localhost:${GDRIVE_REDIRECT_PORT}/callback`
+
+export function syncPushEntriesGDrive(ids: string[]): Promise<number> {
+  return nativeSyncPushEntriesGdrive(ids) as Promise<number>
+}
+
+export function syncPushAllGDrive(): Promise<number> {
+  return nativeSyncPushAllGdrive() as Promise<number>
+}
+
+export function syncPullAsyncGDrive(): Promise<number> {
+  return nativeSyncPullAsyncGdrive() as Promise<number>
+}
+
+export async function authGoogleDrive(): Promise<string> {
+  const codeVerifier = randomUrlSafe(64)
+  const codeChallenge = await sha256Base64Url(codeVerifier)
+  const state = randomUrlSafe(32)
+
+  return new Promise<string>((resolve, reject) => {
+    let settled = false
+
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true
+        server.stop()
+        reject(new Error("Authorization timed out"))
+      }
+    }, 120_000)
+
+    const server = Bun.serve({
+      port: GDRIVE_REDIRECT_PORT,
+      fetch: async (req) => {
+        const url = new URL(req.url)
+        if (url.pathname !== "/callback") {
+          return new Response("Not found", { status: 404 })
+        }
+
+        const code = url.searchParams.get("code")
+        const returnedState = url.searchParams.get("state")
+
+        if (!code || returnedState !== state) {
+          return new Response("Authorization failed: invalid state or missing code.", {
+            status: 400,
+            headers: { "Content-Type": "text/html" },
+          })
+        }
+
+        try {
+          const tokenResp = await fetch("https://oauth2.googleapis.com/token", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              code,
+              grant_type: "authorization_code",
+              client_id: GDRIVE_CLIENT_ID,
+              client_secret: GDRIVE_CLIENT_SECRET,
+              code_verifier: codeVerifier,
+              redirect_uri: GDRIVE_REDIRECT_URI,
+            }),
+          })
+
+          const tokenData = await tokenResp.json() as {
+            access_token?: string
+            refresh_token?: string
+          }
+
+          if (!tokenData.access_token) {
+            throw new Error("No access_token in response")
+          }
+
+          setConfig("google_drive_token", tokenData.access_token)
+          if (tokenData.refresh_token) {
+            setConfig("google_drive_refresh_token", tokenData.refresh_token)
+          }
+
+          if (!settled) {
+            settled = true
+            clearTimeout(timer)
+            server.stop()
+            resolve(tokenData.access_token)
+          }
+
+          return new Response(
+            "<html><body style='font-family:system-ui;text-align:center;padding:60px'>" +
+            "<h2>Connected!</h2><p>You can close this tab and return to silt.</p>" +
+            "</body></html>",
+            { headers: { "Content-Type": "text/html" } },
+          )
+        } catch (err) {
+          if (!settled) {
+            settled = true
+            clearTimeout(timer)
+            server.stop()
+            reject(err)
+          }
+          return new Response("Authorization failed.", { status: 500 })
+        }
+      },
+    })
+
+    const authUrl =
+      `https://accounts.google.com/o/oauth2/v2/auth` +
+      `?client_id=${GDRIVE_CLIENT_ID}` +
+      `&response_type=code` +
+      `&redirect_uri=${encodeURIComponent(GDRIVE_REDIRECT_URI)}` +
+      `&code_challenge=${codeChallenge}` +
+      `&code_challenge_method=S256` +
+      `&state=${state}` +
+      `&access_type=offline` +
+      `&prompt=consent` +
+      `&scope=${encodeURIComponent("https://www.googleapis.com/auth/drive.file")}`
+
+    Bun.spawn(["open", authUrl])
+  })
 }

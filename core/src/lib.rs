@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod dropbox;
 pub mod entry;
+pub mod google_drive;
 pub mod index;
 pub mod storage;
 pub mod sync;

@@ -6,6 +6,7 @@ use napi::bindgen_prelude::AsyncTask;
 use napi::Task;
 use napi_derive::napi;
 use silt_core::dropbox::DropboxSync;
+use silt_core::google_drive::GoogleDriveSync;
 use silt_core::sync::SyncAdapter;
 use silt_core::Silt;
 
@@ -238,6 +239,44 @@ pub fn sync_pull_async() -> napi::Result<AsyncTask<SyncPullTask>> {
     }))
 }
 
+fn all_entry_paths() -> Vec<PathBuf> {
+    let entries_dir = data_dir().join("entries");
+    std::fs::read_dir(&entries_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("md"))
+        .collect()
+}
+
+#[napi]
+pub fn sync_push_all() -> napi::Result<AsyncTask<SyncPushTask>> {
+    let (token, refresh_token) = get_dropbox_credentials()?;
+    let entries_dir = data_dir().join("entries");
+    let file_paths = all_entry_paths();
+    Ok(AsyncTask::new(SyncPushTask {
+        token,
+        refresh_token,
+        entries_dir,
+        file_paths,
+    }))
+}
+
+#[napi]
+pub fn sync_push_all_gdrive() -> napi::Result<AsyncTask<GDrivePushTask>> {
+    let (token, refresh_token, folder_id) = get_gdrive_credentials()?;
+    let entries_dir = data_dir().join("entries");
+    let file_paths = all_entry_paths();
+    Ok(AsyncTask::new(GDrivePushTask {
+        token,
+        refresh_token,
+        folder_id,
+        entries_dir,
+        file_paths,
+    }))
+}
+
 // --- Dropbox sync helpers ---
 
 const DROPBOX_APP_KEY: &str = "yo99v8km1tmfhjj";
@@ -273,6 +312,172 @@ fn save_refreshed_token(sync: &DropboxSync, original_token: &str) {
         settings.insert("dropbox_token".into(), serde_json::Value::String(current));
         let _ = write_settings(&settings);
     }
+}
+
+// --- Google Drive sync helpers ---
+
+const GDRIVE_CLIENT_ID: &str = "472212712976-0re1irdle5up1o6cm1v1ujma9eppufr3.apps.googleusercontent.com";
+const GDRIVE_CLIENT_SECRET: &str = "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";
+
+fn get_gdrive_credentials() -> napi::Result<(String, Option<String>, Option<String>)> {
+    let settings = read_settings();
+    let token = settings
+        .get("google_drive_token")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| napi::Error::from_reason("No Google Drive token configured"))?
+        .to_string();
+    let refresh = settings
+        .get("google_drive_refresh_token")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let folder_id = settings
+        .get("google_drive_folder_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    Ok((token, refresh, folder_id))
+}
+
+fn save_refreshed_gdrive_token(sync: &GoogleDriveSync, original_token: &str) {
+    let mut changed = false;
+    let mut settings = read_settings();
+
+    let current = sync.current_token();
+    if current != original_token {
+        settings.insert("google_drive_token".into(), serde_json::Value::String(current));
+        changed = true;
+    }
+
+    // Cache folder ID so we don't have to look it up every time
+    if let Some(folder_id) = sync.current_folder_id() {
+        let existing = settings
+            .get("google_drive_folder_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if existing != folder_id {
+            settings.insert("google_drive_folder_id".into(), serde_json::Value::String(folder_id));
+            changed = true;
+        }
+    }
+
+    if changed {
+        let _ = write_settings(&settings);
+    }
+}
+
+pub struct GDrivePushTask {
+    token: String,
+    refresh_token: Option<String>,
+    folder_id: Option<String>,
+    entries_dir: PathBuf,
+    file_paths: Vec<PathBuf>,
+}
+
+impl Task for GDrivePushTask {
+    type Output = u32;
+    type JsValue = u32;
+
+    fn compute(&mut self) -> napi::Result<Self::Output> {
+        let sync = GoogleDriveSync::new(self.token.clone(), &self.entries_dir);
+        let sync = if let Some(ref refresh) = self.refresh_token {
+            sync.with_refresh(
+                refresh.clone(),
+                GDRIVE_CLIENT_ID.to_string(),
+                GDRIVE_CLIENT_SECRET.to_string(),
+            )
+        } else {
+            sync
+        };
+        let sync = if let Some(ref fid) = self.folder_id {
+            sync.with_folder_id(fid.clone())
+        } else {
+            sync
+        };
+
+        let original_token = sync.current_token();
+        let count = self.file_paths.len() as u32;
+        sync.push(&self.file_paths)
+            .map_err(|e| napi::Error::from_reason(format!("{e}")))?;
+        save_refreshed_gdrive_token(&sync, &original_token);
+        Ok(count)
+    }
+
+    fn resolve(&mut self, _env: napi::Env, output: Self::Output) -> napi::Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
+pub struct GDrivePullTask {
+    token: String,
+    refresh_token: Option<String>,
+    folder_id: Option<String>,
+    entries_dir: PathBuf,
+}
+
+impl Task for GDrivePullTask {
+    type Output = u32;
+    type JsValue = u32;
+
+    fn compute(&mut self) -> napi::Result<Self::Output> {
+        let sync = GoogleDriveSync::new(self.token.clone(), &self.entries_dir);
+        let sync = if let Some(ref refresh) = self.refresh_token {
+            sync.with_refresh(
+                refresh.clone(),
+                GDRIVE_CLIENT_ID.to_string(),
+                GDRIVE_CLIENT_SECRET.to_string(),
+            )
+        } else {
+            sync
+        };
+        let sync = if let Some(ref fid) = self.folder_id {
+            sync.with_folder_id(fid.clone())
+        } else {
+            sync
+        };
+
+        let original_token = sync.current_token();
+        let pulled = sync
+            .pull()
+            .map_err(|e| napi::Error::from_reason(format!("{e}")))?;
+        save_refreshed_gdrive_token(&sync, &original_token);
+        Ok(pulled.len() as u32)
+    }
+
+    fn resolve(&mut self, _env: napi::Env, output: Self::Output) -> napi::Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
+#[napi]
+pub fn sync_push_entries_gdrive(ids: Vec<String>) -> napi::Result<AsyncTask<GDrivePushTask>> {
+    let (token, refresh_token, folder_id) = get_gdrive_credentials()?;
+    let entries_dir = data_dir().join("entries");
+    let file_paths: Vec<PathBuf> = ids
+        .iter()
+        .map(|id| entries_dir.join(format!("{id}.md")))
+        .filter(|p| p.exists())
+        .collect();
+    Ok(AsyncTask::new(GDrivePushTask {
+        token,
+        refresh_token,
+        folder_id,
+        entries_dir,
+        file_paths,
+    }))
+}
+
+#[napi]
+pub fn sync_pull_async_gdrive() -> napi::Result<AsyncTask<GDrivePullTask>> {
+    let (token, refresh_token, folder_id) = get_gdrive_credentials()?;
+    let entries_dir = data_dir().join("entries");
+    Ok(AsyncTask::new(GDrivePullTask {
+        token,
+        refresh_token,
+        folder_id,
+        entries_dir,
+    }))
 }
 
 // --- Config (standalone, same settings.json as CLI) ---
