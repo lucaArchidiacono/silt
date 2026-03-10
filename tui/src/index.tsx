@@ -2,7 +2,7 @@ import { createCliRenderer } from "@opentui/core"
 import type { TextareaRenderable } from "@opentui/core"
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { useState, useCallback, useRef } from "react"
-import { listEntries, newEntry, searchEntries, editEntry, deleteEntry, getConfig, setConfig, authDropbox, type Entry } from "./silt"
+import { listEntries, newEntry, searchEntries, editEntry, deleteEntry, getConfig, setConfig, authDropbox, syncPushEntries, syncPullAsync, rebuildIndex, type Entry } from "./silt"
 
 const BG = "#000000"
 const FG = "#CCCCCC"
@@ -18,6 +18,13 @@ function maskToken(token: string): string {
   if (token.length <= 8) return "****"
   return token.slice(0, 4) + "****" + token.slice(-4)
 }
+
+function hasDropbox(): boolean {
+  const token = getConfig("dropbox_token")
+  return token !== null && token !== ""
+}
+
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 const App = () => {
   const renderer = useRenderer()
@@ -35,6 +42,43 @@ const App = () => {
   const [settingsSelected, setSettingsSelected] = useState(0)
   const [dropboxToken, setDropboxToken] = useState<string | null>(null)
   const [authInProgress, setAuthInProgress] = useState(false)
+  const spinnerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const spinnerFrameRef = useRef(0)
+
+  const startSync = useCallback((label: string, promise: Promise<number>, onDone?: (count: number) => void) => {
+    // Start spinner
+    spinnerFrameRef.current = 0
+    setStatus(`${SPINNER[0]} ${label}`)
+    spinnerRef.current = setInterval(() => {
+      spinnerFrameRef.current = (spinnerFrameRef.current + 1) % SPINNER.length
+      setStatus(`${SPINNER[spinnerFrameRef.current]} ${label}`)
+    }, 80)
+
+    promise
+      .then((count) => {
+        if (spinnerRef.current) clearInterval(spinnerRef.current)
+        spinnerRef.current = null
+        onDone?.(count)
+      })
+      .catch(() => {
+        if (spinnerRef.current) clearInterval(spinnerRef.current)
+        spinnerRef.current = null
+        setStatus("Sync failed.")
+      })
+  }, [])
+
+  // Pull from Dropbox on startup
+  const startupPullDone = useRef(false)
+  if (!startupPullDone.current && hasDropbox()) {
+    startupPullDone.current = true
+    startSync("Pulling from Dropbox...", syncPullAsync(), (count) => {
+      if (count > 0) {
+        rebuildIndex()
+        setEntries(listEntries())
+      }
+      setStatus(count > 0 ? `Pulled ${count} entries from Dropbox.` : "Up to date.")
+    })
+  }
 
   const menuItems: { label: string; screen: SettingsScreen }[] =
     settingsScreen === "menu"
@@ -171,11 +215,17 @@ const App = () => {
       if (key.name === "return") {
         const body = (textareaRef.current?.plainText ?? writeText).trim()
         if (body) {
-          newEntry(body)
+          const entry = newEntry(body)
           setEntries(listEntries())
           textareaRef.current?.clear()
           setWriteText("")
-          setStatus("Entry saved.")
+          if (hasDropbox()) {
+            startSync("Syncing...", syncPushEntries([entry.id]), () => {
+              setStatus("Entry saved & synced.")
+            })
+          } else {
+            setStatus("Entry saved.")
+          }
         }
       }
     }
@@ -196,7 +246,13 @@ const App = () => {
         deleteEntry(entry.id)
         setEntries(listEntries())
         setSelected((s) => Math.max(0, Math.min(s, entries.length - 2)))
-        setStatus(`Deleted entry.`)
+        if (hasDropbox()) {
+          startSync("Syncing...", syncPushEntries([entry.id]), () => {
+            setStatus("Deleted & synced.")
+          })
+        } else {
+          setStatus("Deleted entry.")
+        }
       }
     }
   })
@@ -224,9 +280,15 @@ const App = () => {
       setEntries(listEntries())
       setEditingEntry(null)
       setMode("list")
-      setStatus("Entry updated.")
+      if (hasDropbox()) {
+        startSync("Syncing...", syncPushEntries([editingEntry.id]), () => {
+          setStatus("Entry updated & synced.")
+        })
+      } else {
+        setStatus("Entry updated.")
+      }
     },
-    [editingEntry],
+    [editingEntry, startSync],
   )
 
   const isListActive = mode === "list" || mode === "edit"

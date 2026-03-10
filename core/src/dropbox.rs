@@ -50,10 +50,19 @@ struct DownloadArg {
     path: String,
 }
 
+// --- Token refresh types ---
+
+#[derive(serde::Deserialize)]
+struct TokenResponse {
+    access_token: String,
+}
+
 // --- DropboxSync ---
 
 pub struct DropboxSync {
-    token: String,
+    token: Mutex<String>,
+    refresh_token: Option<String>,
+    app_key: Option<String>,
     entries_dir: PathBuf,
     client: reqwest::blocking::Client,
     status: Mutex<SyncStatus>,
@@ -62,11 +71,62 @@ pub struct DropboxSync {
 impl DropboxSync {
     pub fn new(token: String, entries_dir: &Path) -> Self {
         Self {
-            token,
+            token: Mutex::new(token),
+            refresh_token: None,
+            app_key: None,
             entries_dir: entries_dir.to_path_buf(),
             client: reqwest::blocking::Client::new(),
             status: Mutex::new(SyncStatus::Idle),
         }
+    }
+
+    pub fn with_refresh(mut self, refresh_token: String, app_key: String) -> Self {
+        self.refresh_token = Some(refresh_token);
+        self.app_key = Some(app_key);
+        self
+    }
+
+    /// Returns the current access token (may have been refreshed).
+    pub fn current_token(&self) -> String {
+        self.token.lock().unwrap().clone()
+    }
+
+    fn get_token(&self) -> String {
+        self.token.lock().unwrap().clone()
+    }
+
+    /// Refresh the access token using the stored refresh token.
+    /// Returns the new access token on success.
+    fn refresh_access_token(&self) -> Result<String> {
+        let refresh = self.refresh_token.as_ref()
+            .ok_or_else(|| anyhow!("no refresh token available — please re-authorize Dropbox"))?;
+        let app_key = self.app_key.as_ref()
+            .ok_or_else(|| anyhow!("no app key available for token refresh"))?;
+
+        let resp = self
+            .client
+            .post("https://api.dropboxapi.com/oauth2/token")
+            .form(&[
+                ("grant_type", "refresh_token"),
+                ("refresh_token", refresh.as_str()),
+                ("client_id", app_key.as_str()),
+            ])
+            .send()
+            .context("token refresh request failed")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().unwrap_or_default();
+            return Err(anyhow!(
+                "token refresh failed ({}): {} — please re-authorize Dropbox",
+                status,
+                body
+            ));
+        }
+
+        let token_data: TokenResponse = resp.json().context("parsing token refresh response")?;
+        *self.token.lock().unwrap() = token_data.access_token.clone();
+        Ok(token_data.access_token)
     }
 
     fn set_status(&self, s: SyncStatus) {
@@ -84,7 +144,7 @@ impl DropboxSync {
         let resp = self
             .client
             .post("https://api.dropboxapi.com/2/files/list_folder")
-            .bearer_auth(&self.token)
+            .bearer_auth(&self.get_token())
             .json(&ListFolderRequest {
                 path: REMOTE_ENTRIES_PATH.to_string(),
                 recursive: false,
@@ -92,6 +152,15 @@ impl DropboxSync {
             })
             .send()
             .context("list_folder request failed")?;
+
+        // 401 = expired token, try refresh
+        if resp.status().as_u16() == 401 {
+            if self.refresh_token.is_some() {
+                self.refresh_access_token()?;
+                return self.list_remote_files_inner();
+            }
+            return Err(anyhow!("Dropbox token expired — please re-authorize Dropbox"));
+        }
 
         // 409 with path/not_found means the folder doesn't exist yet
         if resp.status().as_u16() == 409 {
@@ -116,7 +185,66 @@ impl DropboxSync {
             let resp = self
                 .client
                 .post("https://api.dropboxapi.com/2/files/list_folder/continue")
-                .bearer_auth(&self.token)
+                .bearer_auth(&self.get_token())
+                .json(&ListFolderContinueRequest {
+                    cursor: result.cursor,
+                })
+                .send()
+                .context("list_folder/continue request failed")?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().unwrap_or_default();
+                return Err(anyhow!(
+                    "Dropbox list_folder/continue error ({}): {}",
+                    status,
+                    body
+                ));
+            }
+
+            result = resp.json().context("parsing list_folder/continue response")?;
+            files.extend(Self::extract_md_files(&result.entries));
+        }
+
+        Ok(files)
+    }
+
+    /// Inner list call used after token refresh (no further retry).
+    fn list_remote_files_inner(&self) -> Result<Vec<(String, u64)>> {
+        let resp = self
+            .client
+            .post("https://api.dropboxapi.com/2/files/list_folder")
+            .bearer_auth(&self.get_token())
+            .json(&ListFolderRequest {
+                path: REMOTE_ENTRIES_PATH.to_string(),
+                recursive: false,
+                include_deleted: false,
+            })
+            .send()
+            .context("list_folder request failed")?;
+
+        if resp.status().as_u16() == 409 {
+            let body = resp.text().unwrap_or_default();
+            if body.contains("not_found") {
+                return Ok(Vec::new());
+            }
+            return Err(anyhow!("Dropbox list_folder error (409): {}", body));
+        }
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().unwrap_or_default();
+            return Err(anyhow!("Dropbox list_folder error ({}): {}", status, body));
+        }
+
+        let mut result: ListFolderResponse = resp.json().context("parsing list_folder response")?;
+        let mut files = Self::extract_md_files(&result.entries);
+
+        while result.has_more {
+            let resp = self
+                .client
+                .post("https://api.dropboxapi.com/2/files/list_folder/continue")
+                .bearer_auth(&self.get_token())
                 .json(&ListFolderContinueRequest {
                     cursor: result.cursor,
                 })
@@ -149,6 +277,10 @@ impl DropboxSync {
     }
 
     fn upload_file(&self, local_path: &Path) -> Result<()> {
+        self.upload_file_inner(local_path, true)
+    }
+
+    fn upload_file_inner(&self, local_path: &Path, allow_retry: bool) -> Result<()> {
         let filename = local_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -167,7 +299,7 @@ impl DropboxSync {
         let resp = self
             .client
             .post("https://content.dropboxapi.com/2/files/upload")
-            .bearer_auth(&self.token)
+            .bearer_auth(&self.get_token())
             .header(
                 "Dropbox-API-Arg",
                 serde_json::to_string(&arg).context("serializing upload arg")?,
@@ -176,6 +308,11 @@ impl DropboxSync {
             .body(data)
             .send()
             .with_context(|| format!("uploading {}", filename))?;
+
+        if resp.status().as_u16() == 401 && allow_retry && self.refresh_token.is_some() {
+            self.refresh_access_token()?;
+            return self.upload_file_inner(local_path, false);
+        }
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -187,6 +324,10 @@ impl DropboxSync {
     }
 
     fn download_file(&self, filename: &str) -> Result<PathBuf> {
+        self.download_file_inner(filename, true)
+    }
+
+    fn download_file_inner(&self, filename: &str, allow_retry: bool) -> Result<PathBuf> {
         let arg = DownloadArg {
             path: Self::remote_path(filename),
         };
@@ -194,13 +335,18 @@ impl DropboxSync {
         let resp = self
             .client
             .post("https://content.dropboxapi.com/2/files/download")
-            .bearer_auth(&self.token)
+            .bearer_auth(&self.get_token())
             .header(
                 "Dropbox-API-Arg",
                 serde_json::to_string(&arg).context("serializing download arg")?,
             )
             .send()
             .with_context(|| format!("downloading {}", filename))?;
+
+        if resp.status().as_u16() == 401 && allow_retry && self.refresh_token.is_some() {
+            self.refresh_access_token()?;
+            return self.download_file_inner(filename, false);
+        }
 
         if !resp.status().is_success() {
             let status = resp.status();

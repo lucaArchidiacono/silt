@@ -1,4 +1,4 @@
-import { SiltSession, getConfig as nativeGetConfig, setConfig as nativeSetConfig, type JsEntry } from "../../napi"
+import { SiltSession, getConfig as nativeGetConfig, setConfig as nativeSetConfig, syncPushEntries as nativeSyncPushEntries, syncPullAsync as nativeSyncPullAsync, type JsEntry } from "../../napi"
 
 export type Entry = JsEntry
 
@@ -30,6 +30,18 @@ export function getConfig(key: string): string | null {
 
 export function setConfig(key: string, value: string): void {
   nativeSetConfig(key, value)
+}
+
+export function rebuildIndex(): void {
+  silt.rebuildIndex()
+}
+
+export function syncPushEntries(ids: string[]): Promise<number> {
+  return nativeSyncPushEntries(ids) as Promise<number>
+}
+
+export function syncPullAsync(): Promise<number> {
+  return nativeSyncPullAsync() as Promise<number>
 }
 
 const DROPBOX_APP_KEY = "yo99v8km1tmfhjj"

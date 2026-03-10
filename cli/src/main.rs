@@ -59,6 +59,35 @@ fn get_dropbox_token() -> Result<String> {
         .map_err(|_| anyhow!("no Dropbox token configured. Use `silt config set dropbox_token <token>` or set SILT_DROPBOX_TOKEN"))
 }
 
+fn get_dropbox_refresh_token() -> Option<String> {
+    read_settings()
+        .get("dropbox_refresh_token")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+const DROPBOX_APP_KEY: &str = "yo99v8km1tmfhjj";
+
+fn make_dropbox_sync(token: String, entries_dir: &std::path::Path) -> silt_core::dropbox::DropboxSync {
+    let sync = silt_core::dropbox::DropboxSync::new(token, entries_dir);
+    if let Some(refresh) = get_dropbox_refresh_token() {
+        sync.with_refresh(refresh, DROPBOX_APP_KEY.to_string())
+    } else {
+        sync
+    }
+}
+
+/// If the access token was refreshed during sync, persist the new one.
+fn save_refreshed_token(sync: &silt_core::dropbox::DropboxSync, original_token: &str) {
+    let current = sync.current_token();
+    if current != original_token {
+        let mut settings = read_settings();
+        settings.insert("dropbox_token".into(), serde_json::Value::String(current));
+        let _ = write_settings(&settings);
+    }
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("help");
@@ -132,19 +161,21 @@ fn main() -> Result<()> {
             match action {
                 "push" => {
                     let silt = Silt::open(&data_dir())?;
-                    let sync = silt_core::dropbox::DropboxSync::new(token, silt.entries_dir());
+                    let sync = make_dropbox_sync(token.clone(), silt.entries_dir());
                     let paths: Vec<PathBuf> = std::fs::read_dir(silt.entries_dir())?
                         .filter_map(|e| e.ok())
                         .map(|e| e.path())
                         .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("md"))
                         .collect();
                     sync.push(&paths)?;
+                    save_refreshed_token(&sync, &token);
                     println!("{{\"pushed\":{}}}", paths.len());
                 }
                 "pull" => {
                     let mut silt = Silt::open(&data_dir())?;
-                    let sync = silt_core::dropbox::DropboxSync::new(token, silt.entries_dir());
+                    let sync = make_dropbox_sync(token.clone(), silt.entries_dir());
                     let pulled = sync.pull()?;
+                    save_refreshed_token(&sync, &token);
                     if !pulled.is_empty() {
                         silt.rebuild_index()?;
                     }
@@ -162,7 +193,7 @@ fn main() -> Result<()> {
                 }
                 "status" => {
                     let silt = Silt::open(&data_dir())?;
-                    let sync = silt_core::dropbox::DropboxSync::new(token, silt.entries_dir());
+                    let sync = make_dropbox_sync(token, silt.entries_dir());
                     let status = match sync.status() {
                         silt_core::sync::SyncStatus::Idle => "idle",
                         silt_core::sync::SyncStatus::Syncing => "syncing",
