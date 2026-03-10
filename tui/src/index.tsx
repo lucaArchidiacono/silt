@@ -1,5 +1,5 @@
 import { createCliRenderer } from "@opentui/core";
-import type { TextareaRenderable, ScrollBoxRenderable } from "@opentui/core";
+import type { TextareaRenderable, ScrollBoxRenderable, InputRenderable } from "@opentui/core";
 import {
   createRoot,
   useKeyboard,
@@ -81,6 +81,7 @@ const App = () => {
   const spinnerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const spinnerFrameRef = useRef(0);
   const [logLines, setLogLines] = useState<string[]>([]);
+  const searchInputRef = useRef<InputRenderable>(null);
   const [logScroll, setLogScroll] = useState(0);
   const logScrollRef = useRef<ScrollBoxRenderable>(null);
 
@@ -203,6 +204,13 @@ const App = () => {
     }
 
     if (key.ctrl && key.name === "c") {
+      if (mode === "search") {
+        searchInputRef.current?.clear();
+        setEntries(listEntries());
+        setSelected(0);
+        setStatus("");
+        return;
+      }
       if (writeInsert) {
         setWriteInsert(false);
         setWriteText(textareaRef.current?.plainText ?? "");
@@ -405,6 +413,16 @@ const App = () => {
       return;
     }
 
+    if (mode === "search") {
+      if (key.name === "escape") {
+        searchInputRef.current?.clear();
+        setEntries(listEntries());
+        setSelected(0);
+        setStatus("");
+        return;
+      }
+    }
+
     if (mode === "edit") {
       if (key.name === "escape") {
         setMode("list");
@@ -477,13 +495,25 @@ const App = () => {
     setWriteText(textareaRef.current?.plainText ?? "");
   }, []);
 
+  const handleSearchInput = useCallback((value: string) => {
+    if (!value.trim()) {
+      setEntries(listEntries());
+      setSelected(0);
+      setStatus("");
+    }
+  }, []);
+
   const handleSearch = useCallback((value: string) => {
     const query = value.trim();
-    if (!query) return;
+    if (!query) {
+      setEntries(listEntries());
+      setSelected(0);
+      setStatus("");
+      return;
+    }
     const results = searchEntries(query);
     setEntries(results);
     setSelected(0);
-    setMode("list");
     setStatus(`${results.length} result${results.length === 1 ? "" : "s"}`);
   }, []);
 
@@ -585,9 +615,11 @@ const App = () => {
           }}
         >
           <input
+            ref={searchInputRef}
             placeholder="Search your entries..."
             focused={dialog === null}
             onSubmit={(event) => handleSearch(event.toString())}
+            onInput={(value) => handleSearchInput(value)}
             style={{
               backgroundColor: BG,
               textColor: FG,
@@ -649,7 +681,7 @@ const App = () => {
         title={`Entries (${entries.length})`}
       >
         {entries.map((e, i) => {
-          const isSelected = mode === "list" && i === selected;
+          const isSelected = (mode === "list" || mode === "search") && i === selected;
           return (
             <box
               key={e.id}
