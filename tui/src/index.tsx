@@ -1,6 +1,7 @@
 import { createCliRenderer } from "@opentui/core"
+import type { TextareaRenderable } from "@opentui/core"
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
-import { useState, useCallback } from "react"
+import { useState, useCallback, useRef } from "react"
 import { listEntries, newEntry, searchEntries, editEntry, deleteEntry, getConfig, setConfig, authDropbox, type Entry } from "./silt"
 
 const BG = "#000000"
@@ -25,6 +26,9 @@ const App = () => {
   const [entries, setEntries] = useState<Entry[]>(() => listEntries())
   const [selected, setSelected] = useState(0)
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null)
+  const [writeInsert, setWriteInsert] = useState(false)
+  const [writeText, setWriteText] = useState("")
+  const textareaRef = useRef<TextareaRenderable>(null)
   const [status, setStatus] = useState("")
   const [showSettings, setShowSettings] = useState(false)
   const [settingsScreen, setSettingsScreen] = useState<SettingsScreen>("menu")
@@ -40,9 +44,21 @@ const App = () => {
         : []
 
   useKeyboard((key) => {
-    if (key.ctrl && (key.name === "c" || key.name === "q")) {
+    if (key.ctrl && key.name === "q") {
       renderer?.destroy()
       process.exit(0)
+    }
+
+    if (key.ctrl && key.name === "c") {
+      if (writeInsert) {
+        setWriteInsert(false)
+        setWriteText(textareaRef.current?.plainText ?? "")
+        setStatus("Ctrl+C again to quit")
+      } else {
+        renderer?.destroy()
+        process.exit(0)
+      }
+      return
     }
 
     // Toggle settings overlay
@@ -115,6 +131,16 @@ const App = () => {
     }
 
     // Main app keyboard handling (only when settings closed)
+
+    // Write insert sub-mode: textarea handles all keys, we only catch Esc
+    if (mode === "write" && writeInsert) {
+      if (key.name === "escape") {
+        setWriteInsert(false)
+        setWriteText(textareaRef.current?.plainText ?? "")
+      }
+      return
+    }
+
     if (mode === "edit") {
       if (key.name === "escape") {
         setMode("list")
@@ -124,6 +150,9 @@ const App = () => {
     }
 
     if (key.name === "tab") {
+      if (mode === "write") {
+        setWriteText(textareaRef.current?.plainText ?? "")
+      }
       setMode((m) => {
         const next = m === "write" ? "list" : m === "list" ? "search" : "write"
         if (next === "list") {
@@ -132,6 +161,23 @@ const App = () => {
         }
         return next
       })
+    }
+
+    // Write normal sub-mode
+    if (mode === "write") {
+      if (key.name === "i") {
+        setWriteInsert(true)
+      }
+      if (key.name === "return") {
+        const body = (textareaRef.current?.plainText ?? writeText).trim()
+        if (body) {
+          newEntry(body)
+          setEntries(listEntries())
+          textareaRef.current?.clear()
+          setWriteText("")
+          setStatus("Entry saved.")
+        }
+      }
     }
 
     if (mode === "list") {
@@ -155,12 +201,8 @@ const App = () => {
     }
   })
 
-  const handleWrite = useCallback((value: string) => {
-    const body = value.trim()
-    if (!body) return
-    newEntry(body)
-    setEntries(listEntries())
-    setStatus("Entry saved.")
+  const handleWriteContentChange = useCallback(() => {
+    setWriteText(textareaRef.current?.plainText ?? "")
   }, [])
 
   const handleSearch = useCallback((value: string) => {
@@ -217,19 +259,33 @@ const App = () => {
         <text content="  Tab: switch  Ctrl+S: settings  Ctrl+Q: quit" style={{ fg: DIM, bg: BG }} />
       </box>
 
-      {/* Input area */}
+      {/* Write mode: textarea with normal/insert sub-modes */}
       {mode === "write" && (
-        <box title="Write (Enter to save)" style={{ border: true, height: 5, bg: BG, borderColor: DIM }}>
-          <input
+        <box
+          title={writeInsert ? " INSERT — Esc: done " : " NORMAL — i: insert  Enter: save "}
+          style={{
+            border: true,
+            flexGrow: 1,
+            bg: BG,
+            borderColor: writeInsert ? ACCENT : DIM,
+          }}
+        >
+          <textarea
+            ref={textareaRef}
             placeholder="What's on your mind?"
-            focused={!showSettings}
-            onSubmit={handleWrite}
-            style={{ bg: BG, fg: FG, focusedBackgroundColor: BG }}
+            initialValue={writeText}
+            focused={writeInsert && !showSettings}
+            onContentChange={handleWriteContentChange}
+            wrapMode="word"
+            backgroundColor={BG}
+            textColor={FG}
+            focusedBackgroundColor={BG}
+            showCursor={writeInsert}
           />
         </box>
       )}
       {mode === "search" && (
-        <box title="Search (Enter to search)" style={{ border: true, height: 5, bg: BG, borderColor: DIM }}>
+        <box title="Search (Enter to search)" style={{ border: true, height: 3, bg: BG, borderColor: DIM }}>
           <input
             placeholder="Search your entries..."
             focused={!showSettings}
@@ -249,15 +305,22 @@ const App = () => {
         </box>
       )}
       {mode === "list" && (
-        <box title="List" style={{ border: true, height: 5, bg: BG, borderColor: DIM }}>
+        <box title="List" style={{ border: true, height: 3, bg: BG, borderColor: DIM }}>
           <text content="j/k: navigate  e: edit  d: delete  Tab: switch" style={{ fg: DIM, bg: BG }} />
         </box>
       )}
 
-      {/* Entries */}
+      {/* Entries — compact in write mode, expanded otherwise */}
       <scrollbox
         focused={mode === "list"}
-        style={{ border: true, flexGrow: 1, bg: BG, borderColor: DIM }}
+        style={{
+          border: true,
+          ...(mode === "write"
+            ? { height: Math.max(6, Math.floor(dimensions.height * 0.25)) }
+            : { flexGrow: 1 }),
+          bg: BG,
+          borderColor: DIM,
+        }}
         title={`Entries (${entries.length})`}
       >
         {entries.map((e, i) => {
@@ -366,5 +429,5 @@ const App = () => {
   )
 }
 
-const renderer = await createCliRenderer({ exitOnCtrlC: true, backgroundColor: "#000000" })
+const renderer = await createCliRenderer({ exitOnCtrlC: false, backgroundColor: "#000000" })
 createRoot(renderer).render(<App />)
