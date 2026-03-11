@@ -157,6 +157,12 @@ fn save_refreshed_gdrive_token(sync: &silt_core::google_drive::GoogleDriveSync, 
 }
 
 fn main() -> Result<()> {
+    let data = data_dir();
+    let with_terminal = env::var("SILT_LOG").map(|v| v == "1").unwrap_or(false);
+    if let Err(e) = silt_core::telemetry::init_file_logging(&data, with_terminal) {
+        eprintln!("warning: could not init logging: {}", e);
+    }
+
     let args: Vec<String> = env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("help");
 

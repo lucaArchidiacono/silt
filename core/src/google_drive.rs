@@ -234,6 +234,7 @@ impl GoogleDriveSync {
 
     fn list_remote_files(&self) -> Result<Vec<DriveFile>> {
         let folder_id = self.ensure_folder()?;
+        log::debug!("[gdrive] listing files in folder {}", folder_id);
         self.list_remote_files_in_folder(&folder_id, true)
     }
 
@@ -282,6 +283,13 @@ impl GoogleDriveSync {
             }
 
             let list: FileList = resp.json().context("parsing Drive file list")?;
+            let page_md_count = list.files.iter().filter(|f| f.name.ends_with(".md")).count();
+            log::debug!(
+                "[gdrive] page returned {} files ({} .md), has_more={}",
+                list.files.len(),
+                page_md_count,
+                list.next_page_token.is_some()
+            );
             all_files.extend(
                 list.files
                     .into_iter()
@@ -289,7 +297,10 @@ impl GoogleDriveSync {
             );
 
             match list.next_page_token {
-                Some(token) => page_token = Some(token),
+                Some(token) => {
+                    log::debug!("[gdrive] fetching next page of remote files");
+                    page_token = Some(token);
+                }
                 None => break,
             }
         }
@@ -476,12 +487,14 @@ impl SyncAdapter for GoogleDriveSync {
         let remote_files = match self.list_remote_files() {
             Ok(files) => files,
             Err(e) => {
+                log::error!("[gdrive] failed to list remote files: {}", e);
                 let msg = format!("{}", e);
                 self.set_status(SyncStatus::Error(msg));
                 return Err(e);
             }
         };
 
+        log::info!("[gdrive] found {} remote files", remote_files.len());
         let mut downloaded = Vec::new();
 
         for file in &remote_files {
@@ -494,17 +507,31 @@ impl SyncAdapter for GoogleDriveSync {
 
             let should_download = if local_path.exists() {
                 match fs::metadata(&local_path) {
-                    Ok(meta) => meta.len() != remote_size,
+                    Ok(meta) => {
+                        let differs = meta.len() != remote_size;
+                        if differs {
+                            log::debug!(
+                                "[gdrive] {} size mismatch: local={} remote={}, will download",
+                                file.name, meta.len(), remote_size
+                            );
+                        } else {
+                            log::debug!("[gdrive] {} unchanged (size={})", file.name, meta.len());
+                        }
+                        differs
+                    }
                     Err(_) => true,
                 }
             } else {
+                log::debug!("[gdrive] {} is new, will download", file.name);
                 true
             };
 
             if should_download {
+                log::info!("[gdrive] downloading {} (id={})", file.name, file.id);
                 match self.download_file(&file.name, &file.id) {
                     Ok(path) => downloaded.push(path),
                     Err(e) => {
+                        log::error!("[gdrive] download failed for {}: {}", file.name, e);
                         let msg = format!("{}", e);
                         self.set_status(SyncStatus::Error(msg));
                         return Err(e);
@@ -513,6 +540,7 @@ impl SyncAdapter for GoogleDriveSync {
             }
         }
 
+        log::info!("[gdrive] pull complete: {} downloaded", downloaded.len());
         self.set_status(SyncStatus::Idle);
         Ok(downloaded)
     }

@@ -34,13 +34,15 @@ impl Entry {
     pub fn from_markdown(text: &str) -> Result<Self> {
         let text = text.trim();
         if !text.starts_with("---") {
+            log::warn!("[entry] parse failed: missing frontmatter");
             return Err(anyhow!("missing frontmatter"));
         }
 
         let rest = &text[3..];
-        let end = rest
-            .find("---")
-            .ok_or_else(|| anyhow!("missing closing ---"))?;
+        let end = rest.find("---").ok_or_else(|| {
+            log::warn!("[entry] parse failed: missing closing ---");
+            anyhow!("missing closing ---")
+        })?;
         let frontmatter = &rest[..end];
         let body = rest[end + 3..].trim().to_string();
 

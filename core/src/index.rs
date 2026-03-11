@@ -10,6 +10,7 @@ pub struct Index {
 
 impl Index {
     pub fn open(path: &Path) -> Result<Self> {
+        log::debug!("[index] opening SQLite db: {}", path.display());
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -41,6 +42,7 @@ impl Index {
     }
 
     pub fn upsert(&self, entry: &Entry) -> Result<()> {
+        log::debug!("[index] upsert id={} deleted={}", entry.id, entry.deleted_at.is_some());
         self.conn.execute(
             "INSERT INTO entries (id, body, created_at, deleted_at)
              VALUES (?1, ?2, ?3, ?4)
@@ -53,12 +55,14 @@ impl Index {
     }
 
     pub fn remove(&self, id: &str) -> Result<()> {
+        log::debug!("[index] removing id={}", id);
         self.conn
             .execute("DELETE FROM entries WHERE id = ?1", [id])?;
         Ok(())
     }
 
     pub fn search(&self, query: &str) -> Result<Vec<Entry>> {
+        log::debug!("[index] FTS search for {:?}", query);
         // Add * to each term for prefix matching ("gro" matches "groceries")
         let fts_query: String = query
             .split_whitespace()
@@ -112,6 +116,7 @@ impl Index {
     }
 
     pub fn clear(&self) -> Result<()> {
+        log::debug!("[index] clearing all entries");
         self.conn.execute("DELETE FROM entries", [])?;
         Ok(())
     }

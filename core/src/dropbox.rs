@@ -142,6 +142,7 @@ impl DropboxSync {
     /// Returns (filename, size) pairs. Handles pagination.
     /// Returns empty vec if the folder doesn't exist yet.
     fn list_remote_files(&self) -> Result<Vec<(String, u64)>> {
+        log::debug!("[dropbox] listing remote files in {}", REMOTE_ENTRIES_PATH);
         let resp = self
             .client
             .post("https://api.dropboxapi.com/2/files/list_folder")
@@ -167,6 +168,7 @@ impl DropboxSync {
         if resp.status().as_u16() == 409 {
             let body = resp.text().unwrap_or_default();
             if body.contains("not_found") {
+                log::info!("[dropbox] remote /entries folder does not exist yet");
                 return Ok(Vec::new());
             }
             return Err(anyhow!("Dropbox list_folder error (409): {}", body));
@@ -180,9 +182,11 @@ impl DropboxSync {
 
         let mut result: ListFolderResponse = resp.json().context("parsing list_folder response")?;
         let mut files = Self::extract_md_files(&result.entries);
+        log::debug!("[dropbox] initial page: {} .md files, has_more={}", files.len(), result.has_more);
 
         // Paginate
         while result.has_more {
+            log::debug!("[dropbox] fetching next page of remote files");
             let resp = self
                 .client
                 .post("https://api.dropboxapi.com/2/files/list_folder/continue")
@@ -407,12 +411,14 @@ impl SyncAdapter for DropboxSync {
         let remote_files = match self.list_remote_files() {
             Ok(files) => files,
             Err(e) => {
+                log::error!("[dropbox] failed to list remote files: {}", e);
                 let msg = format!("{}", e);
                 self.set_status(SyncStatus::Error(msg));
                 return Err(e);
             }
         };
 
+        log::info!("[dropbox] found {} remote files", remote_files.len());
         let mut downloaded = Vec::new();
 
         for (filename, remote_size) in &remote_files {
@@ -421,17 +427,31 @@ impl SyncAdapter for DropboxSync {
             let should_download = if local_path.exists() {
                 // Re-download if size differs (catches soft-delete changes)
                 match fs::metadata(&local_path) {
-                    Ok(meta) => meta.len() != *remote_size,
+                    Ok(meta) => {
+                        let dominated = meta.len() != *remote_size;
+                        if dominated {
+                            log::debug!(
+                                "[dropbox] {} size mismatch: local={} remote={}, will download",
+                                filename, meta.len(), remote_size
+                            );
+                        } else {
+                            log::debug!("[dropbox] {} unchanged (size={})", filename, meta.len());
+                        }
+                        dominated
+                    }
                     Err(_) => true,
                 }
             } else {
+                log::debug!("[dropbox] {} is new, will download", filename);
                 true
             };
 
             if should_download {
+                log::info!("[dropbox] downloading {}", filename);
                 match self.download_file(filename) {
                     Ok(path) => downloaded.push(path),
                     Err(e) => {
+                        log::error!("[dropbox] download failed for {}: {}", filename, e);
                         let msg = format!("{}", e);
                         self.set_status(SyncStatus::Error(msg));
                         return Err(e);
@@ -440,6 +460,7 @@ impl SyncAdapter for DropboxSync {
             }
         }
 
+        log::info!("[dropbox] pull complete: {} downloaded", downloaded.len());
         self.set_status(SyncStatus::Idle);
         Ok(downloaded)
     }

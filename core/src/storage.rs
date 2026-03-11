@@ -10,6 +10,7 @@ pub struct FileStorage {
 
 impl FileStorage {
     pub fn new(dir: &Path) -> Result<Self> {
+        log::debug!("[storage] initializing entries dir: {}", dir.display());
         fs::create_dir_all(dir)?;
         Ok(Self {
             dir: dir.to_path_buf(),
@@ -22,12 +23,14 @@ impl FileStorage {
 
     pub fn write(&self, entry: &Entry) -> Result<()> {
         let path = self.entry_path(&entry.id);
+        log::debug!("[storage] writing {}", path.display());
         fs::write(&path, entry.to_markdown())?;
         Ok(())
     }
 
     pub fn read(&self, id: &str) -> Result<Entry> {
         let path = self.entry_path(id);
+        log::debug!("[storage] reading {}", path.display());
         let text = fs::read_to_string(&path)?;
         Entry::from_markdown(&text)
     }
@@ -45,10 +48,12 @@ impl FileStorage {
         }
         ids.sort();
         ids.reverse(); // newest first (ULIDs sort chronologically)
+        log::debug!("[storage] listed {} .md files", ids.len());
         Ok(ids)
     }
 
     pub fn update_body(&self, id: &str, new_body: &str) -> Result<Entry> {
+        log::debug!("[storage] updating body for id={}", id);
         let mut entry = self.read(id)?;
         entry.body = new_body.to_string();
         self.write(&entry)?;
@@ -56,6 +61,7 @@ impl FileStorage {
     }
 
     pub fn soft_delete(&self, id: &str) -> Result<()> {
+        log::debug!("[storage] soft-deleting id={}", id);
         let mut entry = self.read(id)?;
         entry.deleted_at = Some(chrono::Utc::now().to_rfc3339());
         self.write(&entry)
