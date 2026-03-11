@@ -6,16 +6,18 @@ import type {
 import { createContext, use, useState, useRef, useCallback } from "react";
 import { listEntries, type Entry } from "./silt";
 
-export type Mode = "write" | "list" | "search" | "edit";
+export type Mode = "write" | "search" | "edit" | "ai";
 export type Dialog = "settings" | "logs" | null;
-export type SettingsScreen = "menu" | "providers" | "dropbox" | "gdrive";
+export type SettingsScreen = "menu" | "providers" | "dropbox" | "gdrive" | "ai-config" | "ai-model" | "ai-url" | "ai-key";
+export type PanelFocus = "top" | "bottom";
 
 export interface AppState {
   mode: Mode;
   entries: Entry[];
   selected: number;
   editingEntry: Entry | null;
-  writeInsert: boolean;
+  insertMode: boolean;
+  panelFocus: PanelFocus;
   writeText: string;
   status: string;
   dialog: Dialog;
@@ -26,6 +28,9 @@ export interface AppState {
   authInProgress: boolean;
   logLines: string[];
   logScroll: number;
+  aiResponse: string;
+  aiLoading: boolean;
+  aiScroll: number;
 }
 
 export interface AppActions {
@@ -33,7 +38,8 @@ export interface AppActions {
   setEntries: React.Dispatch<React.SetStateAction<Entry[]>>;
   setSelected: React.Dispatch<React.SetStateAction<number>>;
   setEditingEntry: React.Dispatch<React.SetStateAction<Entry | null>>;
-  setWriteInsert: React.Dispatch<React.SetStateAction<boolean>>;
+  setInsertMode: React.Dispatch<React.SetStateAction<boolean>>;
+  setPanelFocus: React.Dispatch<React.SetStateAction<PanelFocus>>;
   setWriteText: React.Dispatch<React.SetStateAction<string>>;
   setStatus: React.Dispatch<React.SetStateAction<string>>;
   setDialog: React.Dispatch<React.SetStateAction<Dialog>>;
@@ -44,11 +50,16 @@ export interface AppActions {
   setAuthInProgress: React.Dispatch<React.SetStateAction<boolean>>;
   setLogLines: React.Dispatch<React.SetStateAction<string[]>>;
   setLogScroll: React.Dispatch<React.SetStateAction<number>>;
+  setAiResponse: React.Dispatch<React.SetStateAction<string>>;
+  setAiLoading: React.Dispatch<React.SetStateAction<boolean>>;
+  setAiScroll: React.Dispatch<React.SetStateAction<number>>;
 }
 
 export interface AppRefs {
   textareaRef: React.RefObject<TextareaRenderable | null>;
   searchInputRef: React.RefObject<InputRenderable | null>;
+  aiInputRef: React.RefObject<InputRenderable | null>;
+  aiSettingsInputRef: React.RefObject<InputRenderable | null>;
   logScrollRef: React.RefObject<ScrollBoxRenderable | null>;
   spinnerRef: React.MutableRefObject<ReturnType<typeof setInterval> | null>;
   spinnerFrameRef: React.MutableRefObject<number>;
@@ -73,7 +84,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [entries, setEntries] = useState<Entry[]>(() => listEntries());
   const [selected, setSelected] = useState(0);
   const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
-  const [writeInsert, setWriteInsert] = useState(false);
+  const [insertMode, setInsertMode] = useState(false);
+  const [panelFocus, setPanelFocus] = useState<PanelFocus>("top");
   const [writeText, setWriteText] = useState("");
   const [status, setStatus] = useState("");
   const [dialog, setDialog] = useState<Dialog>(null);
@@ -84,9 +96,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [authInProgress, setAuthInProgress] = useState(false);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [logScroll, setLogScroll] = useState(0);
+  const [aiResponse, setAiResponse] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiScroll, setAiScroll] = useState(0);
 
   const textareaRef = useRef<TextareaRenderable>(null);
   const searchInputRef = useRef<InputRenderable>(null);
+  const aiInputRef = useRef<InputRenderable>(null);
+  const aiSettingsInputRef = useRef<InputRenderable>(null);
   const logScrollRef = useRef<ScrollBoxRenderable>(null);
   const spinnerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const spinnerFrameRef = useRef(0);
@@ -97,7 +114,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       entries,
       selected,
       editingEntry,
-      writeInsert,
+      insertMode,
+      panelFocus,
       writeText,
       status,
       dialog,
@@ -108,13 +126,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       authInProgress,
       logLines,
       logScroll,
+      aiResponse,
+      aiLoading,
+      aiScroll,
     },
     actions: {
       setMode,
       setEntries,
       setSelected,
       setEditingEntry,
-      setWriteInsert,
+      setInsertMode,
+      setPanelFocus,
       setWriteText,
       setStatus,
       setDialog,
@@ -125,10 +147,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setAuthInProgress,
       setLogLines,
       setLogScroll,
+      setAiResponse,
+      setAiLoading,
+      setAiScroll,
     },
     refs: {
       textareaRef,
       searchInputRef,
+      aiInputRef,
+      aiSettingsInputRef,
       logScrollRef,
       spinnerRef,
       spinnerFrameRef,

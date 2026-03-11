@@ -1,4 +1,4 @@
-import { SiltSession, getConfig as nativeGetConfig, setConfig as nativeSetConfig, syncPushEntries as nativeSyncPushEntries, syncPullAsync as nativeSyncPullAsync, syncPushAll as nativeSyncPushAll, syncPushEntriesGdrive as nativeSyncPushEntriesGdrive, syncPullAsyncGdrive as nativeSyncPullAsyncGdrive, syncPushAllGdrive as nativeSyncPushAllGdrive, getLogs as nativeGetLogs, clearLogs as nativeClearLogs, type JsEntry } from "../../napi"
+import { SiltSession, getConfig as nativeGetConfig, setConfig as nativeSetConfig, syncPushEntries as nativeSyncPushEntries, syncPullAsync as nativeSyncPullAsync, syncPushAll as nativeSyncPushAll, syncPushEntriesGdrive as nativeSyncPushEntriesGdrive, syncPullAsyncGdrive as nativeSyncPullAsyncGdrive, syncPushAllGdrive as nativeSyncPushAllGdrive, getLogs as nativeGetLogs, clearLogs as nativeClearLogs, aiQuery as nativeAiQuery, type JsEntry } from "../../napi"
 
 export type Entry = JsEntry
 
@@ -42,6 +42,10 @@ export function getLogs(): string[] {
 
 export function clearLogs(): void {
   nativeClearLogs()
+}
+
+export function aiQuery(query: string): Promise<string> {
+  return nativeAiQuery(query) as Promise<string>
 }
 
 export function syncPushEntries(ids: string[]): Promise<number> {

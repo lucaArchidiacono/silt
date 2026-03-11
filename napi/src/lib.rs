@@ -562,3 +562,49 @@ pub fn set_config(key: String, value: String) -> napi::Result<()> {
     write_settings(&settings)?;
     Ok(())
 }
+
+// --- AI query (async) ---
+
+pub struct AiQueryTask {
+    query: String,
+}
+
+impl Task for AiQueryTask {
+    type Output = String;
+    type JsValue = String;
+
+    fn compute(&mut self) -> napi::Result<Self::Output> {
+        let settings = read_settings();
+
+        let provider_name = settings
+            .get("ai_provider")
+            .and_then(|v| v.as_str())
+            .unwrap_or("ollama");
+        let model = settings
+            .get("ai_model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("llama3.2");
+        let ollama_url = settings.get("ollama_url").and_then(|v| v.as_str());
+        let openrouter_key = settings
+            .get("openrouter_api_key")
+            .and_then(|v| v.as_str());
+
+        let provider = silt_core::ai::make_provider(provider_name, model, ollama_url, openrouter_key)
+            .map_err(|e| napi::Error::from_reason(format!("{e}")))?;
+
+        let silt = Silt::open(&data_dir())
+            .map_err(|e| napi::Error::from_reason(format!("{e}")))?;
+
+        silt.ai_query(&self.query, provider.as_ref())
+            .map_err(|e| napi::Error::from_reason(format!("{e}")))
+    }
+
+    fn resolve(&mut self, _env: napi::Env, output: Self::Output) -> napi::Result<Self::JsValue> {
+        Ok(output)
+    }
+}
+
+#[napi]
+pub fn ai_query(query: String) -> napi::Result<AsyncTask<AiQueryTask>> {
+    Ok(AsyncTask::new(AiQueryTask { query }))
+}

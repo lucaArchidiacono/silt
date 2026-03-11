@@ -115,6 +115,27 @@ impl Index {
         Ok(entries)
     }
 
+    pub fn list_all(&self) -> Result<Vec<Entry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, body, created_at, deleted_at
+             FROM entries
+             WHERE deleted_at IS NULL
+             ORDER BY created_at ASC",
+        )?;
+        let entries = stmt
+            .query_map([], |row| {
+                Ok(Entry {
+                    id: row.get(0)?,
+                    body: row.get(1)?,
+                    created_at: row.get(2)?,
+                    deleted_at: row.get(3)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(entries)
+    }
+
     pub fn clear(&self) -> Result<()> {
         log::debug!("[index] clearing all entries");
         self.conn.execute("DELETE FROM entries", [])?;

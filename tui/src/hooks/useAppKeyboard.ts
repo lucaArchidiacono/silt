@@ -3,6 +3,7 @@ import {
   listEntries,
   newEntry,
   deleteEntry,
+  editEntry,
   getConfig,
   setConfig,
   authDropbox,
@@ -25,7 +26,8 @@ export function useAppKeyboard() {
     entries,
     selected,
     editingEntry,
-    writeInsert,
+    insertMode,
+    panelFocus,
     dialog,
     settingsScreen,
     settingsSelected,
@@ -34,6 +36,9 @@ export function useAppKeyboard() {
     authInProgress,
     logLines,
     logScroll,
+    aiResponse,
+    aiLoading,
+    aiScroll,
   } = state;
 
   const {
@@ -41,7 +46,8 @@ export function useAppKeyboard() {
     setEntries,
     setSelected,
     setEditingEntry,
-    setWriteInsert,
+    setInsertMode,
+    setPanelFocus,
     setWriteText,
     setStatus,
     setDialog,
@@ -52,13 +58,18 @@ export function useAppKeyboard() {
     setAuthInProgress,
     setLogLines,
     setLogScroll,
+    setAiResponse,
+    setAiScroll,
   } = actions;
 
-  const { textareaRef, searchInputRef, logScrollRef } = refs;
+  const { textareaRef, searchInputRef, aiInputRef, logScrollRef } = refs;
 
   const menuItems =
     settingsScreen === "menu"
-      ? [{ label: "Sync Providers", screen: "providers" as const }]
+      ? [
+          { label: "Sync Providers", screen: "providers" as const },
+          { label: "AI Provider", screen: "ai-config" as const },
+        ]
       : settingsScreen === "providers"
         ? [
             { label: "Dropbox", screen: "dropbox" as const },
@@ -74,16 +85,11 @@ export function useAppKeyboard() {
     }
 
     if (key.ctrl && key.name === "c") {
-      if (mode === "search") {
-        searchInputRef.current?.clear();
-        setEntries(listEntries());
-        setSelected(0);
-        setStatus("");
-        return;
-      }
-      if (writeInsert) {
-        setWriteInsert(false);
-        setWriteText(textareaRef.current?.plainText ?? "");
+      if (insertMode) {
+        setInsertMode(false);
+        if (mode === "write") {
+          setWriteText(textareaRef.current?.plainText ?? "");
+        }
         setStatus("Ctrl+C again to quit");
       } else {
         renderer?.destroy();
@@ -139,33 +145,117 @@ export function useAppKeyboard() {
       return;
     }
 
-    // --- Write insert sub-mode ---
-    if (mode === "write" && writeInsert) {
-      if (key.name === "escape") {
-        setWriteInsert(false);
-        setWriteText(textareaRef.current?.plainText ?? "");
-      }
-      return;
-    }
-
-    // --- Search mode ---
-    if (mode === "search") {
-      if (key.name === "escape") {
-        searchInputRef.current?.clear();
-        setEntries(listEntries());
-        setSelected(0);
-        setStatus("");
-        return;
-      }
-    }
-
-    // --- Edit mode ---
+    // --- Edit mode (standalone) ---
     if (mode === "edit") {
       if (key.name === "escape") {
-        setMode("list");
+        setMode("write");
+        setPanelFocus("bottom");
         setEditingEntry(null);
+        setEntries(listEntries());
       }
       return;
+    }
+
+    // --- INSERT MODE (write/search/ai) ---
+    if ((mode === "write" || mode === "search" || mode === "ai") && insertMode) {
+      if (key.name === "escape") {
+        setInsertMode(false);
+        if (mode === "write") {
+          setWriteText(textareaRef.current?.plainText ?? "");
+        }
+      }
+      // All other keys go to the focused text field
+      return;
+    }
+
+    // --- AI loading: block all keys ---
+    if (mode === "ai" && aiLoading) return;
+
+    // --- VISUAL MODE (write/search/ai) ---
+    if (mode === "write" || mode === "search" || mode === "ai") {
+      // i: enter insert mode (focuses top input)
+      if (key.name === "i") {
+        setPanelFocus("top");
+        setInsertMode(true);
+        return;
+      }
+
+      // h: focus top panel
+      if (key.name === "h") {
+        setPanelFocus("top");
+        return;
+      }
+
+      // l: focus bottom panel
+      if (key.name === "l") {
+        if (mode !== "ai") {
+          setEntries(listEntries());
+          setSelected(0);
+        }
+        setPanelFocus("bottom");
+        return;
+      }
+
+      // Bottom panel focused
+      if (panelFocus === "bottom") {
+        if (mode === "ai") {
+          // AI: j/k scroll response
+          if (key.name === "j" || key.name === "down") {
+            setAiScroll((s) => s + 1);
+            return;
+          }
+          if (key.name === "k" || key.name === "up") {
+            setAiScroll((s) => Math.max(0, s - 1));
+            return;
+          }
+        } else {
+          // Write/Search: j/k/e/d on entry list
+          if (key.name === "j" || key.name === "down") {
+            setSelected((s) => Math.min(s + 1, entries.length - 1));
+            return;
+          }
+          if (key.name === "k" || key.name === "up") {
+            setSelected((s) => Math.max(s - 1, 0));
+            return;
+          }
+          if (key.name === "e" && entries[selected]) {
+            setEditingEntry(entries[selected]);
+            setMode("edit");
+            return;
+          }
+          if (key.name === "d" && entries[selected]) {
+            const entry = entries[selected];
+            deleteEntry(entry.id);
+            setEntries(listEntries());
+            setSelected((s) => Math.max(0, Math.min(s, entries.length - 2)));
+            if (hasAnySyncProvider()) {
+              pushToAll([entry.id], () => setStatus("Deleted & synced."));
+            } else {
+              setStatus("Deleted entry.");
+            }
+            return;
+          }
+        }
+      }
+
+      // Top panel focused, visual mode: Enter to submit
+      if (panelFocus === "top") {
+        if (mode === "write" && key.name === "return") {
+          const body = (textareaRef.current?.plainText ?? "").trim();
+          if (body) {
+            const entry = newEntry(body);
+            setEntries(listEntries());
+            textareaRef.current?.clear();
+            setWriteText("");
+            if (hasAnySyncProvider()) {
+              pushToAll([entry.id], () => setStatus("Entry saved & synced."));
+            } else {
+              setStatus("Entry saved.");
+            }
+          }
+          return;
+        }
+      }
     }
 
     // --- Tab cycling ---
@@ -174,60 +264,22 @@ export function useAppKeyboard() {
         setWriteText(textareaRef.current?.plainText ?? "");
       }
       setMode((m) => {
-        const next = m === "write" ? "list" : m === "list" ? "search" : "write";
-        if (next === "list") {
-          setEntries(listEntries());
-          setSelected(0);
+        const next =
+          m === "write"
+            ? "search"
+            : m === "search"
+              ? "ai"
+              : "write";
+        if (next === "ai") {
+          setAiResponse("");
+          setAiScroll(0);
         }
         return next;
       });
+      setInsertMode(false);
+      setPanelFocus("top");
     }
 
-    // --- Write normal sub-mode ---
-    if (mode === "write") {
-      if (key.name === "i") {
-        setWriteInsert(true);
-      }
-      if (key.name === "return") {
-        const body = (textareaRef.current?.plainText ?? "").trim();
-        if (body) {
-          const entry = newEntry(body);
-          setEntries(listEntries());
-          textareaRef.current?.clear();
-          setWriteText("");
-          if (hasAnySyncProvider()) {
-            pushToAll([entry.id], () => setStatus("Entry saved & synced."));
-          } else {
-            setStatus("Entry saved.");
-          }
-        }
-      }
-    }
-
-    // --- List mode ---
-    if (mode === "list") {
-      if (key.name === "j" || key.name === "down") {
-        setSelected((s) => Math.min(s + 1, entries.length - 1));
-      }
-      if (key.name === "k" || key.name === "up") {
-        setSelected((s) => Math.max(s - 1, 0));
-      }
-      if (key.name === "e" && entries[selected]) {
-        setEditingEntry(entries[selected]);
-        setMode("edit");
-      }
-      if (key.name === "d" && entries[selected]) {
-        const entry = entries[selected];
-        deleteEntry(entry.id);
-        setEntries(listEntries());
-        setSelected((s) => Math.max(0, Math.min(s, entries.length - 2)));
-        if (hasAnySyncProvider()) {
-          pushToAll([entry.id], () => setStatus("Deleted & synced."));
-        } else {
-          setStatus("Deleted entry.");
-        }
-      }
-    }
   });
 
   function handleLogKeys(key: { name: string; shift?: boolean }) {
@@ -278,6 +330,12 @@ export function useAppKeyboard() {
       if (settingsScreen === "dropbox" || settingsScreen === "gdrive") {
         setSettingsScreen("providers");
         setSettingsSelected(0);
+      } else if (settingsScreen === "ai-model" || settingsScreen === "ai-url" || settingsScreen === "ai-key") {
+        setSettingsScreen("ai-config");
+        setSettingsSelected(0);
+      } else if (settingsScreen === "ai-config") {
+        setSettingsScreen("menu");
+        setSettingsSelected(0);
       } else if (settingsScreen === "providers") {
         setSettingsScreen("menu");
         setSettingsSelected(0);
@@ -313,6 +371,36 @@ export function useAppKeyboard() {
         setConfig("dropbox_refresh_token", "");
         setDropboxToken(null);
         setStatus("Dropbox disconnected.");
+      }
+      return;
+    }
+
+    if (settingsScreen === "ai-model" || settingsScreen === "ai-url" || settingsScreen === "ai-key") {
+      // Input is handled by the component's onSubmit; only Escape goes back
+      return;
+    }
+
+    if (settingsScreen === "ai-config") {
+      const provider = getConfig("ai_provider") || "ollama";
+      const isOllama = provider === "ollama";
+      const itemCount = 3;
+
+      if (key.name === "j" || key.name === "down") {
+        setSettingsSelected((s) => Math.min(s + 1, itemCount - 1));
+      }
+      if (key.name === "k" || key.name === "up") {
+        setSettingsSelected((s) => Math.max(s - 1, 0));
+      }
+      if (key.name === "return") {
+        if (settingsSelected === 0) {
+          const next = isOllama ? "openrouter" : "ollama";
+          setConfig("ai_provider", next);
+          setStatus(`AI provider set to ${next}.`);
+        } else if (settingsSelected === 1) {
+          setSettingsScreen("ai-model");
+        } else if (settingsSelected === 2) {
+          setSettingsScreen(isOllama ? "ai-url" : "ai-key");
+        }
       }
       return;
     }

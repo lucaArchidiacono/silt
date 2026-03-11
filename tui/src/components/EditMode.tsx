@@ -18,7 +18,7 @@ export function EditMode() {
       editEntry(editingEntry.id, body);
       setEntries(listEntries());
       setEditingEntry(null);
-      setMode("list");
+      setMode("write");
       if (hasAnySyncProvider()) {
         pushToAll([editingEntry.id], () =>
           setStatus("Entry updated & synced."),

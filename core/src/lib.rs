@@ -7,9 +7,10 @@ pub mod storage;
 pub mod sync;
 pub mod telemetry;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 
+use ai::{AiProvider, ChatMessage};
 use entry::Entry;
 use index::Index;
 use storage::FileStorage;
@@ -105,9 +106,62 @@ impl Silt {
         Ok(())
     }
 
+    pub fn list_all_entries(&self) -> Result<Vec<Entry>> {
+        let entries = self.index.list_all()?;
+        log::debug!("[silt] list_all returned {} entries", entries.len());
+        Ok(entries)
+    }
+
+    pub fn ai_query(&self, query: &str, provider: &dyn AiProvider) -> Result<String> {
+        log::info!("[silt] ai_query: {:?}", query);
+        let entries = self.index.list_all()?;
+        if entries.is_empty() {
+            return Err(anyhow!("No entries found. Write some entries first."));
+        }
+
+        let context = build_rag_context(&entries);
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: context,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: query.to_string(),
+            },
+        ];
+
+        log::info!(
+            "[silt] sending {} entries as context ({} chars)",
+            entries.len(),
+            messages.iter().map(|m| m.content.len()).sum::<usize>()
+        );
+
+        provider.chat(&messages)
+    }
+
     pub fn entries_dir(&self) -> &Path {
         &self.entries_dir
     }
+}
+
+fn build_rag_context(entries: &[Entry]) -> String {
+    let mut ctx = String::from(
+        "You are an AI assistant for Silt, a personal write-only log app. \
+         The user writes short markdown entries as a journal/log. \
+         Below are ALL of the user's entries, in chronological order. \
+         Use them to answer the user's question accurately.\n\n\
+         --- ENTRIES ---\n\n",
+    );
+
+    for entry in entries {
+        // Extract just the date portion from the ISO timestamp
+        let date = entry.created_at.split('T').next().unwrap_or(&entry.created_at);
+        ctx.push_str(&format!("[{}]\n{}\n\n", date, entry.body));
+    }
+
+    ctx.push_str("--- END ENTRIES ---");
+    ctx
 }
 
 #[cfg(test)]

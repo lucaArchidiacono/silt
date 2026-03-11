@@ -5,23 +5,30 @@ import { BG, FG, DIM, HIGHLIGHT_BG, HIGHLIGHT_FG } from "../theme";
 export function EntryList() {
   const dimensions = useTerminalDimensions();
   const { state } = useApp();
-  const { mode, entries, selected } = state;
+  const { mode, entries, selected, panelFocus } = state;
+
+  const bottomFocused = panelFocus === "bottom";
+  const showSelection = bottomFocused;
 
   return (
     <scrollbox
-      focused={mode === "list"}
+      focused={bottomFocused}
       style={{
         border: true,
         ...(mode === "write"
           ? { height: Math.max(6, Math.floor(dimensions.height * 0.25)) }
           : { flexGrow: 1 }),
         backgroundColor: BG,
-        borderColor: DIM,
+        borderColor: bottomFocused ? FG : DIM,
       }}
-      title={`Entries (${entries.length})`}
+      title={
+        bottomFocused
+          ? `Entries (${entries.length}) — j/k: scroll  e: edit  d: delete  h/l: nav`
+          : `Entries (${entries.length})`
+      }
     >
       {entries.map((e, i) => {
-        const isSelected = (mode === "list" || mode === "search") && i === selected;
+        const isSelected = showSelection && i === selected;
         return (
           <box
             key={e.id}

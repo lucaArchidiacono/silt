@@ -1,13 +1,16 @@
 import { useCallback } from "react";
 import { useApp } from "../context";
 import { listEntries, searchEntries } from "../silt";
-import { BG, FG, DIM } from "../theme";
+import { BG, FG, DIM, ACCENT } from "../theme";
 
 export function SearchMode() {
   const { state, actions, refs } = useApp();
-  const { dialog } = state;
+  const { insertMode, panelFocus, dialog } = state;
   const { setEntries, setSelected, setStatus } = actions;
   const { searchInputRef } = refs;
+
+  const topFocused = panelFocus === "top";
+  const isInsert = insertMode && topFocused;
 
   const handleSearchInput = useCallback(
     (value: string) => {
@@ -39,18 +42,22 @@ export function SearchMode() {
 
   return (
     <box
-      title="Search (Enter to search)"
+      title={
+        isInsert
+          ? " INSERT — Esc: visual  Enter: search "
+          : " NORMAL — i: insert  h/l: nav "
+      }
       style={{
         border: true,
         height: 3,
         backgroundColor: BG,
-        borderColor: DIM,
+        borderColor: isInsert ? ACCENT : topFocused ? FG : DIM,
       }}
     >
       <input
         ref={searchInputRef}
         placeholder="Search your entries..."
-        focused={dialog === null}
+        focused={isInsert && dialog === null}
         onSubmit={(event) => handleSearch(event.toString())}
         onInput={(value) => handleSearchInput(value)}
         style={{

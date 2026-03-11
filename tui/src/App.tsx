@@ -7,9 +7,9 @@ import { BG } from "./theme";
 import { TabBar } from "./components/TabBar";
 import { StatusBar } from "./components/StatusBar";
 import { WriteMode } from "./components/WriteMode";
-import { ListMode } from "./components/ListMode";
 import { SearchMode } from "./components/SearchMode";
 import { EditMode } from "./components/EditMode";
+import { AiMode } from "./components/AiMode";
 import { EntryList } from "./components/EntryList";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { LogViewer } from "./components/LogViewer";
@@ -44,8 +44,8 @@ function AppLayout() {
       {mode === "write" && <WriteMode />}
       {mode === "search" && <SearchMode />}
       {mode === "edit" && <EditMode />}
-      {mode === "list" && <ListMode />}
-      <EntryList />
+      {mode === "ai" && <AiMode />}
+      {mode !== "ai" && <EntryList />}
       {dialog === "settings" && <SettingsDialog />}
       {dialog === "logs" && <LogViewer />}
       <StatusBar />

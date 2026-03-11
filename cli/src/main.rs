@@ -328,8 +328,40 @@ fn main() -> Result<()> {
                 }
             }
         }
+        "ai" => {
+            let query = args.get(2).ok_or_else(|| anyhow!("usage: silt ai <query>"))?;
+            let settings = read_settings();
+
+            let provider_name = settings
+                .get("ai_provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("ollama");
+            let model = settings
+                .get("ai_model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("llama3.2");
+            let ollama_url = settings
+                .get("ollama_url")
+                .and_then(|v| v.as_str());
+            let openrouter_key = settings
+                .get("openrouter_api_key")
+                .and_then(|v| v.as_str());
+
+            let provider = silt_core::ai::make_provider(
+                provider_name,
+                model,
+                ollama_url,
+                openrouter_key,
+            )?;
+
+            let silt = Silt::open(&data_dir())?;
+            let response = silt.ai_query(query, provider.as_ref())?;
+            println!("{}", serde_json::to_string(&serde_json::json!({
+                "response": response,
+            }))?);
+        }
         _ => {
-            eprintln!("usage: silt <new|list|search|edit|delete|sync|config> [args]");
+            eprintln!("usage: silt <new|list|search|edit|delete|sync|config|ai> [args]");
             std::process::exit(1);
         }
     }

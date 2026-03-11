@@ -4,9 +4,12 @@ import { BG, FG, DIM, ACCENT } from "../theme";
 
 export function WriteMode() {
   const { state, actions, refs } = useApp();
-  const { writeInsert, writeText, dialog } = state;
+  const { insertMode, panelFocus, writeText, dialog } = state;
   const { setWriteText } = actions;
   const { textareaRef } = refs;
+
+  const topFocused = panelFocus === "top";
+  const isInsert = insertMode && topFocused;
 
   const handleContentChange = useCallback(() => {
     setWriteText(textareaRef.current?.plainText ?? "");
@@ -15,28 +18,28 @@ export function WriteMode() {
   return (
     <box
       title={
-        writeInsert
-          ? " INSERT — Esc: done "
-          : " NORMAL — i: insert  Enter: save "
+        isInsert
+          ? " INSERT — Esc: visual "
+          : " NORMAL — i: insert  Enter: save  h/l: nav "
       }
       style={{
         border: true,
         flexGrow: 1,
         backgroundColor: BG,
-        borderColor: writeInsert ? ACCENT : DIM,
+        borderColor: isInsert ? ACCENT : topFocused ? FG : DIM,
       }}
     >
       <textarea
         ref={textareaRef}
         placeholder="What's on your mind?"
         initialValue={writeText}
-        focused={writeInsert && dialog === null}
+        focused={isInsert && dialog === null}
         onContentChange={handleContentChange}
         wrapMode="word"
         backgroundColor={BG}
         textColor={FG}
         focusedBackgroundColor={BG}
-        showCursor={writeInsert}
+        showCursor={isInsert}
       />
     </box>
   );

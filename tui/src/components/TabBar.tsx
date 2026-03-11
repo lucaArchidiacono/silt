@@ -4,22 +4,14 @@ import { BG, DIM } from "../theme";
 export function TabBar() {
   const { state } = useApp();
   const { mode } = state;
-  const isListActive = mode === "list" || mode === "edit";
 
   return (
     <box style={{ flexDirection: "row", height: 1, backgroundColor: BG }}>
       <text
         content={` Write `}
         style={{
-          fg: mode === "write" ? BG : DIM,
-          bg: mode === "write" ? "#FFFFFF" : BG,
-        }}
-      />
-      <text
-        content={` List `}
-        style={{
-          fg: isListActive ? BG : DIM,
-          bg: isListActive ? "#FFFFFF" : BG,
+          fg: mode === "write" || mode === "edit" ? BG : DIM,
+          bg: mode === "write" || mode === "edit" ? "#FFFFFF" : BG,
         }}
       />
       <text
@@ -27,6 +19,13 @@ export function TabBar() {
         style={{
           fg: mode === "search" ? BG : DIM,
           bg: mode === "search" ? "#FFFFFF" : BG,
+        }}
+      />
+      <text
+        content={` AI `}
+        style={{
+          fg: mode === "ai" ? BG : DIM,
+          bg: mode === "ai" ? "#FFFFFF" : BG,
         }}
       />
       <text
