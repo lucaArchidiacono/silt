@@ -29,7 +29,7 @@ export function TabBar() {
         }}
       />
       <text
-        content="  Tab: switch  Ctrl+S: settings  Ctrl+U: push  Ctrl+P: pull  Ctrl+L: logs  Ctrl+Q: quit"
+        content="  Tab: switch"
         style={{ fg: DIM, bg: BG }}
       />
     </box>
