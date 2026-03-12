@@ -1,0 +1,77 @@
+name: Version Bump
+description: Bump version in all manifests, commit, tag, and push
+
+inputs:
+  bump:
+    description: "patch | minor | major"
+    required: true
+
+outputs:
+  tag:
+    description: "The new git tag (e.g. v0.2.0)"
+    value: ${{ steps.next.outputs.tag }}
+  version:
+    description: "The new version (e.g. 0.2.0)"
+    value: ${{ steps.next.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Get latest tag
+      id: latest
+      shell: bash
+      run: |
+        TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+        if [ -z "$TAG" ]; then TAG="v0.0.0"; fi
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+        echo "Latest tag: $TAG"
+
+    - name: Compute next version
+      id: next
+      shell: bash
+      run: |
+        CURRENT="${{ steps.latest.outputs.tag }}"
+        CURRENT="${CURRENT#v}"
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+        case "${{ inputs.bump }}" in
+          major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+          minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+          patch) PATCH=$((PATCH + 1)) ;;
+        esac
+
+        VERSION="${MAJOR}.${MINOR}.${PATCH}"
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "Next version: $VERSION"
+
+    - name: Update Cargo.toml versions
+      shell: bash
+      run: |
+        VERSION="${{ steps.next.outputs.version }}"
+        sed -i "s/^version = \".*\"/version = \"$VERSION\"/" core/Cargo.toml
+        sed -i "s/^version = \".*\"/version = \"$VERSION\"/" cli/Cargo.toml
+        sed -i "s/^version = \".*\"/version = \"$VERSION\"/" napi/Cargo.toml
+
+    - name: Update package.json versions
+      shell: bash
+      run: |
+        VERSION="${{ steps.next.outputs.version }}"
+        for f in napi/package.json tui/package.json; do
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" "$f"
+        done
+
+    - name: Update Cargo.lock
+      shell: bash
+      run: cargo check --workspace 2>/dev/null || cargo update -w
+
+    - name: Commit & tag
+      shell: bash
+      run: |
+        VERSION="${{ steps.next.outputs.version }}"
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add -A
+        git diff --cached --quiet || git commit -m "release v${VERSION}"
+        git tag "v${VERSION}"
+        git push origin main --tags

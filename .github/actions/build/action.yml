@@ -1,0 +1,57 @@
+name: Build Binaries
+description: Build silt for a single platform
+
+inputs:
+  rust-target:
+    description: "Rust target triple (e.g. aarch64-apple-darwin)"
+    required: true
+  artifact:
+    description: "Artifact name (e.g. silt-macos-arm64)"
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ inputs.rust-target }}
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ inputs.artifact }}
+
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+
+    - name: Build silt-cli
+      shell: bash
+      run: cargo build --release -p silt-cli --target ${{ inputs.rust-target }}
+
+    - name: Build NAPI addon
+      shell: bash
+      run: cd napi && bun install && bun run build
+
+    - name: Install TUI deps
+      shell: bash
+      run: cd tui && bun install
+
+    - name: Build silt-tui
+      shell: bash
+      run: cd tui && bun build --compile src/index.tsx --outfile ../dist/silt-tui
+
+    - name: Create tarball
+      shell: bash
+      run: |
+        mkdir -p staging
+        cp target/${{ inputs.rust-target }}/release/silt-cli staging/
+        cp dist/silt-tui staging/
+        cd staging
+        tar czf ../${{ inputs.artifact }}.tar.gz silt-cli silt-tui
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact }}
+        path: ${{ inputs.artifact }}.tar.gz
+        if-no-files-found: error

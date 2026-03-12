@@ -1,8 +1,16 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: write
@@ -11,12 +19,26 @@ concurrency:
   group: release
   cancel-in-progress: false
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
+  version:
+    name: Bump version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - id: version
+        uses: ./.github/actions/version
+        with:
+          bump: ${{ inputs.bump }}
+
   build:
     name: Build (${{ matrix.name }})
+    needs: version
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -36,157 +58,22 @@ jobs:
             artifact: silt-linux-x64
     steps:
       - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust-target }}
-
-      - uses: Swatinem/rust-cache@v2
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: ./.github/actions/build
         with:
-          key: ${{ matrix.name }}
+          rust-target: ${{ matrix.rust-target }}
+          artifact: ${{ matrix.artifact }}
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Build silt-cli
-        run: cargo build --release -p silt-cli --target ${{ matrix.rust-target }}
-
-      - name: Build NAPI addon
-        run: cd napi && bun install && bun run build
-
-      - name: Install TUI deps
-        run: cd tui && bun install
-
-      - name: Build silt-tui
-        run: cd tui && bun build --compile src/index.tsx --outfile ../dist/silt-tui
-
-      - name: Create tarball
-        run: |
-          mkdir -p staging
-          cp target/${{ matrix.rust-target }}/release/silt-cli staging/
-          cp dist/silt-tui staging/
-          cd staging
-          tar czf ../${{ matrix.artifact }}.tar.gz silt-cli silt-tui
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}.tar.gz
-          if-no-files-found: error
-
-  release:
-    name: Create Release
-    needs: build
+  publish:
+    name: Publish release
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
         with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Compute SHA256 checksums
-        run: |
-          cd artifacts
-          sha256sum *.tar.gz | tee sha256sums.txt
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+          ref: main
+      - uses: ./.github/actions/publish
         with:
-          generate_release_notes: true
-          files: |
-            artifacts/*.tar.gz
-            artifacts/sha256sums.txt
-
-      - name: Update Homebrew formulas
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          TAG="${GITHUB_REF_NAME}"
-          BASE_URL="https://github.com/lucaarchidiacono/silt/releases/download/${TAG}"
-
-          MACOS_ARM64_SHA=$(grep 'silt-macos-arm64.tar.gz' artifacts/sha256sums.txt | awk '{print $1}')
-          MACOS_X64_SHA=$(grep 'silt-macos-x64.tar.gz' artifacts/sha256sums.txt | awk '{print $1}')
-          LINUX_X64_SHA=$(grep 'silt-linux-x64.tar.gz' artifacts/sha256sums.txt | awk '{print $1}')
-
-          cat > Formula/silt-tui.rb << FORMULA
-          class SiltTui < Formula
-            desc "Local-first, write-only log app — terminal UI"
-            homepage "https://github.com/lucaarchidiacono/silt"
-            version "${VERSION}"
-            license "MIT"
-
-            on_macos do
-              if Hardware::CPU.arm?
-                url "${BASE_URL}/silt-macos-arm64.tar.gz"
-                sha256 "${MACOS_ARM64_SHA}"
-              else
-                url "${BASE_URL}/silt-macos-x64.tar.gz"
-                sha256 "${MACOS_X64_SHA}"
-              end
-            end
-
-            on_linux do
-              if Hardware::CPU.intel?
-                url "${BASE_URL}/silt-linux-x64.tar.gz"
-                sha256 "${LINUX_X64_SHA}"
-              end
-            end
-
-            def install
-              bin.install "silt-tui"
-            end
-
-            test do
-              assert_predicate bin/"silt-tui", :executable?
-            end
-          end
-          FORMULA
-
-          cat > Formula/silt-cli.rb << FORMULA
-          class SiltCli < Formula
-            desc "Local-first, write-only log app — CLI"
-            homepage "https://github.com/lucaarchidiacono/silt"
-            version "${VERSION}"
-            license "MIT"
-
-            on_macos do
-              if Hardware::CPU.arm?
-                url "${BASE_URL}/silt-macos-arm64.tar.gz"
-                sha256 "${MACOS_ARM64_SHA}"
-              else
-                url "${BASE_URL}/silt-macos-x64.tar.gz"
-                sha256 "${MACOS_X64_SHA}"
-              end
-            end
-
-            on_linux do
-              if Hardware::CPU.intel?
-                url "${BASE_URL}/silt-linux-x64.tar.gz"
-                sha256 "${LINUX_X64_SHA}"
-              end
-            end
-
-            def install
-              bin.install "silt-cli"
-            end
-
-            test do
-              output = shell_output("#{bin}/silt-cli help 2>&1", 1)
-              assert_match "usage:", output
-            end
-          end
-          FORMULA
-
-      - name: Commit formula update
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout main
-          git add Formula/
-          git diff --cached --quiet && echo "No formula changes" && exit 0
-          git commit -m "update Homebrew formulas to ${GITHUB_REF_NAME}"
-          git push origin main
+          tag: ${{ needs.version.outputs.tag }}
+          version: ${{ needs.version.outputs.version }}
