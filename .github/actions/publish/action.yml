@@ -41,7 +41,6 @@ runs:
         BASE_URL="https://github.com/lucaarchidiacono/silt/releases/download/${TAG}"
 
         MACOS_ARM64_SHA=$(grep 'silt-macos-arm64.tar.gz' artifacts/sha256sums.txt | awk '{print $1}')
-        MACOS_X64_SHA=$(grep 'silt-macos-x64.tar.gz' artifacts/sha256sums.txt | awk '{print $1}')
         LINUX_X64_SHA=$(grep 'silt-linux-x64.tar.gz' artifacts/sha256sums.txt | awk '{print $1}')
 
         cat > Formula/silt-tui.rb << FORMULA
@@ -55,9 +54,6 @@ runs:
             if Hardware::CPU.arm?
               url "${BASE_URL}/silt-macos-arm64.tar.gz"
               sha256 "${MACOS_ARM64_SHA}"
-            else
-              url "${BASE_URL}/silt-macos-x64.tar.gz"
-              sha256 "${MACOS_X64_SHA}"
             end
           end
 
@@ -89,9 +85,6 @@ runs:
             if Hardware::CPU.arm?
               url "${BASE_URL}/silt-macos-arm64.tar.gz"
               sha256 "${MACOS_ARM64_SHA}"
-            else
-              url "${BASE_URL}/silt-macos-x64.tar.gz"
-              sha256 "${MACOS_X64_SHA}"
             end
           end
 
