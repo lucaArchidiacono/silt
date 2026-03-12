@@ -48,10 +48,6 @@ jobs:
             runner: macos-latest
             rust-target: aarch64-apple-darwin
             artifact: silt-macos-arm64
-          - name: macos-x64
-            runner: macos-13
-            rust-target: x86_64-apple-darwin
-            artifact: silt-macos-x64
           - name: linux-x64
             runner: ubuntu-latest
             rust-target: x86_64-unknown-linux-gnu
