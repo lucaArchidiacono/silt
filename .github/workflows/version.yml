@@ -1,0 +1,102 @@
+name: Version & Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: Bump version & tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: latest
+        run: |
+          TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$TAG" ]; then
+            TAG="v0.0.0"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Latest tag: $TAG"
+
+      - name: Compute next version
+        id: next
+        run: |
+          CURRENT="${{ steps.latest.outputs.tag }}"
+          CURRENT="${CURRENT#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          case "${{ inputs.bump }}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Next version: $VERSION"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG="${{ steps.latest.outputs.tag }}"
+          VERSION="${{ steps.next.outputs.version }}"
+
+          if git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
+            RANGE="${PREV_TAG}..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+
+          {
+            echo "body<<CHANGELOG_EOF"
+            echo "## What's Changed in v${VERSION}"
+            echo ""
+            git log "$RANGE" --pretty=format:"- %s (%h)" --no-merges
+            echo ""
+            echo ""
+            echo "**Full Changelog**: https://github.com/lucaarchidiacono/silt/compare/${PREV_TAG}...v${VERSION}"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update Cargo.toml versions
+        run: |
+          VERSION="${{ steps.next.outputs.version }}"
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" core/Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" cli/Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" napi/Cargo.toml
+
+      - name: Update package.json versions
+        run: |
+          VERSION="${{ steps.next.outputs.version }}"
+          for f in napi/package.json tui/package.json; do
+            sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" "$f"
+          done
+
+      - name: Update Cargo.lock
+        run: cargo check --workspace 2>/dev/null || cargo update -w
+
+      - name: Commit & tag
+        run: |
+          VERSION="${{ steps.next.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "release v${VERSION}"
+          git tag "v${VERSION}"
+          git push origin main --tags
