@@ -1,0 +1,32 @@
+{
+  "name": "silt-electron",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/electron-main/main.js",
+  "scripts": {
+    "build:main": "../tui/node_modules/.bin/tsc -p tsconfig.node.json",
+    "build:renderer": "vite build",
+    "build": "bun run build:renderer && bun run build:main",
+    "dev:renderer": "vite --host 127.0.0.1 --port 5173",
+    "dev:main": "../tui/node_modules/.bin/tsc -p tsconfig.node.json --watch --preserveWatchOutput",
+    "dev:electron": "wait-on tcp:5173 file:dist-electron/electron-main/main.js && SILT_RENDERER_URL=http://127.0.0.1:5173 electron dist-electron/electron-main/main.js",
+    "dev": "concurrently -k \"bun run dev:renderer\" \"bun run dev:main\" \"bun run dev:electron\"",
+    "start": "electron dist-electron/electron-main/main.js",
+    "typecheck": "../tui/node_modules/.bin/tsc --noEmit && ../tui/node_modules/.bin/tsc -p tsconfig.node.json --noEmit"
+  },
+  "dependencies": {
+    "electron": "^37.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "concurrently": "^9.2.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "wait-on": "^8.0.3"
+  }
+}

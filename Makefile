@@ -2,7 +2,7 @@ DIST = dist
 
 .PHONY: all clean help
 
-all: tui cli  ## Build all clients
+all: tui cli electron  ## Build all clients
 
 # ─── Core ──────────────────────────────────────────────
 
@@ -32,6 +32,13 @@ cli:  ## Build CLI binary → dist/silt-cli
 # web: napi  ## Build web client → dist/silt-web
 # 	cd web && <build command>
 
+.PHONY: electron electron-dev
+electron: napi  ## Build Electron app (macOS dev build assets)
+	cd electron && bun run build
+
+electron-dev: napi  ## Run Electron app in dev mode
+	cd electron && bun run dev
+
 # .PHONY: apple
 # apple:  ## Build macOS/iOS app (UniFFI)
 # 	cd apple && <build command>
@@ -48,6 +55,7 @@ check: typecheck test  ## Run all checks (types + tests)
 typecheck:  ## Type-check Rust workspace + TUI TypeScript
 	cargo check
 	cd tui && bun run typecheck
+	cd electron && bun run typecheck
 
 test:  ## Run core tests
 	cargo test -p silt-core

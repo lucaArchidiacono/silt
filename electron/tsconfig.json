@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "paths": {
+      "react": ["../tui/node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["../tui/node_modules/@types/react/jsx-runtime.d.ts"]
+    },
+    "typeRoots": ["../tui/node_modules/@types"],
+    "types": ["node", "react"]
+  },
+  "include": ["src", "vite.config.ts"]
+}
